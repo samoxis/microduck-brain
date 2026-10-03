@@ -6,11 +6,12 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 from .brain import Brain, Inputs
 from .config import Config
-from .depth import DepthFrame
+from .depth import DepthFrame, Pose
 from .ipc import Link, RpcError, Stream
 
 log = logging.getLogger("microduck_brain")
@@ -42,6 +43,9 @@ class Runner:
         self._limp = False
         self._state_at = -1e9
         self._yaw: float | None = None
+        self._pos: tuple[float, float] | None = None
+        self._poses: deque[tuple[int, Pose | None]] = deque(maxlen=64)   # (t_ns, poză) din robot.state
+        self._frame_t_ns = 0
         self._healthy = False
         self._health_reason = "încă nu am întrebat"
         self._health_at = -1e9
@@ -58,6 +62,8 @@ class Runner:
             return
         with self._lock:
             self._frame, self._frame_at = frame, self.clock()
+            t_ns = params.get("t_ns")
+            self._frame_t_ns = int(t_ns) if isinstance(t_ns, int) else 0
 
     def _on_state(self, method: str, params: dict) -> None:
         if method != "robot.state":
@@ -68,7 +74,23 @@ class Runner:
             self._limp = bool(safety.get("limp", False))
             yaw = (params.get("odom") or {}).get("yaw")
             self._yaw = float(yaw) if isinstance(yaw, (int, float)) else None
+            position = (params.get("odom") or {}).get("position")
+            self._pos = (float(position[0]), float(position[1])) if isinstance(position, list) and len(position) >= 2 else None
+            t_ns = params.get("t_ns")
+            self._poses.append((int(t_ns) if isinstance(t_ns, int) else 0, Pose.from_state(params)))
             self._state_at = self.clock()
+
+    def _pose_for_frame(self) -> Pose | None:
+        """Poza din starea cea mai apropiată în timp de cadrul de adâncime (ceas comun, t_ns); fără
+        t_ns, ultima poză. Mai departe de 100 ms nu e de încredere: mai bine fără poză (toleranță mare)."""
+        if not self._poses:
+            return None
+        if self._frame_t_ns > 0:
+            t, pose = min(self._poses, key=lambda e: abs(e[0] - self._frame_t_ns) if e[0] else 1 << 62)
+            if t and abs(t - self._frame_t_ns) <= 100_000_000:
+                return pose
+            return None
+        return self._poses[-1][1]
 
     # --- intrări ---------------------------------------------------------
     def _poll_health(self, now: float) -> None:
@@ -92,7 +114,10 @@ class Runner:
             frame = self._frame if now - self._frame_at <= s.tof_timeout else None
             fallen, limp = self._fallen, self._limp
             state_age = now - self._state_at
-            yaw = self._yaw if state_age <= s.state_timeout else None
+            fresh = state_age <= s.state_timeout
+            yaw = self._yaw if fresh else None
+            pos = self._pos if fresh else None
+            pose = self._pose_for_frame() if fresh else None
         reason = ""
         if state_age > s.state_timeout:
             reason = "fără robot.state"
@@ -102,7 +127,7 @@ class Runner:
             reason = "robotul e limp"
         elif not self._healthy:
             reason = self._health_reason
-        return Inputs(now=now, frame=frame, safe=not reason, safe_reason=reason, yaw=yaw)
+        return Inputs(now=now, frame=frame, safe=not reason, safe_reason=reason, yaw=yaw, pose=pose, pos=pos)
 
     # --- ieșire ----------------------------------------------------------
     def _send(self, cmd) -> None:
@@ -152,8 +177,8 @@ class Runner:
                     last_log = t0
                     st = self.brain.stats
                     log.info(
-                        "stare=%s ocoliri=%d (frâne=%d) întoarceri_mari=%d opriri_siguranță=%d mers=%.0fs",
-                        name, st.avoids, st.brakes, st.big_turns, st.holds_unsafe, st.forward_seconds,
+                        "stare=%s ocoliri=%d (frâne=%d) obiecte_joase=%d întoarceri_mari=%d opriri_siguranță=%d mers=%.0fs",
+                        name, st.avoids, st.brakes, st.low_seen, st.big_turns, st.holds_unsafe, st.forward_seconds,
                     )
                 self.stop_event.wait(max(0.0, period - (self.clock() - t0)))
         finally:

@@ -81,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         "durata_s": round(time.monotonic() - started, 1),
         "ocoliri": st.avoids,
         "ocoliri_cu_franare": st.brakes,
+        "obiecte_joase_vazute": st.low_seen,
         "intoarceri_mari": st.big_turns,
         "intoarceri_expirate": st.turn_timeouts,
         "opriri_cadere_sau_nesanatos": st.holds_unsafe,

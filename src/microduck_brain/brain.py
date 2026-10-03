@@ -27,10 +27,10 @@ setează ``needs_depth = False``.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .config import Config
-from .depth import DepthFrame, View, analyse
+from .depth import DepthFrame, Pose, View, analyse, low_obstacles
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,8 @@ class Inputs:
     safe: bool                    # robotul e în picioare și sănătos
     safe_reason: str = ""         # de ce nu e sigur (pentru log)
     yaw: float | None = None      # odom.yaw (rad, + = stânga) sau None dacă robotul nu îl raportează
+    pose: Pose | None = None      # poza senzorului din robot.state, pentru geometria podelei
+    pos: tuple[float, float] | None = None   # odom.position[0:2] (m), pentru memoria obiectelor joase
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,7 @@ class Stats:
     avoids: int = 0               # ocoliri începute (viraj din mers și/sau frână + întoarcere)
     brakes: int = 0               # din ele, câte au ajuns la frână + rotire pe loc
     big_turns: int = 0
+    low_seen: int = 0             # obiecte joase (cuburi, mingi) noi, văzute în rândurile de jos
     turn_timeouts: int = 0        # întoarceri care nu s-au eliberat în max_turn_time
     holds_unsafe: int = 0         # opriri pentru cădere / nesănătos
     holds_no_depth: int = 0       # opriri pentru lipsa cadrelor de adâncime
@@ -94,6 +97,7 @@ class Hold(State):
         self._ok_since = None
         self._stop_sent = False
         brain.heading_integral = 0.0
+        brain.forget_low()   # după o cădere poziția odometriei nu mai e de încredere
 
     def step(self, brain, inputs):
         cmd = NONE
@@ -132,7 +136,7 @@ class Forward(State):
         cfg = brain.cfg
         dt = min(0.2, max(0.0, inputs.now - self._last))
         self._last = inputs.now
-        view = analyse(inputs.frame, cfg.obstacle)
+        view = brain.look(inputs)
 
         if view.blocked:
             # Nu mai are loc: oprește-te de tot.
@@ -194,7 +198,7 @@ class Brake(State):
     def step(self, brain, inputs):
         if inputs.now - self.since < brain.cfg.obstacle.stop_pause:
             return move(0.0, 0.0), None
-        view = analyse(inputs.frame, brain.cfg.obstacle)
+        view = brain.look(inputs)
         brain.turn_sign = brain.pick_turn(view)
         brain.steer_sign = brain.turn_sign
         if brain.consecutive_avoids >= brain.cfg.corner.turns_before_big_turn:
@@ -231,7 +235,7 @@ class Turn(_Rotation):
             angle is None or angle >= math.radians(cfg.obstacle.min_turn_degrees)
         )
         if enough:
-            view = analyse(inputs.frame, cfg.obstacle, cfg.obstacle.clear_distance)
+            view = brain.look(inputs, cfg.obstacle.clear_distance)
             if not view.blocked:
                 return move(0.0, 0.0), "forward"
         if elapsed >= cfg.obstacle.max_turn_time:
@@ -283,6 +287,9 @@ class Brain:
         self._raw_yaw: float | None = None
         self.heading_target: float | None = None
         self.heading_integral = 0.0
+        self._low_first: float | None = None
+        self._memory: list[list[float]] = []     # [x, y, t] în cadrul lumii odom
+        self.low_items: list[tuple[float, float]] = []   # (înainte, stânga) față de senzor, acum
         self.states: dict[str, State] = {}
         for s in (Hold(), Forward(), Brake(), Turn(), BigTurn()):
             self.register(s)
@@ -311,6 +318,97 @@ class Brain:
             self.yaw += d
         self._raw_yaw = raw
 
+    # --- obiecte joase -----------------------------------------------------------
+    def forget_low(self) -> None:
+        self._memory.clear()
+        self._low_first = None
+        self.low_items = []
+
+    def _sensor_forward(self, inputs: Inputs) -> float:
+        return inputs.pose.sensor_pos[0] if inputs.pose else self.cfg.low.nominal_sensor_forward
+
+    def _update_low(self, inputs: Inputs) -> None:
+        """O dată pe tick: detectează obiecte joase în cadru, confirmă-le în timp, ține minte unde
+        sunt (în coordonate odom) și calculează ce e acum în fața robotului. Un cub de 7 cm dispare
+        sub cea mai de jos rază când robotul se apropie, de aceea memoria."""
+        cfg = self.cfg
+        self.low_items = []
+        if cfg.obstacle.low_obstacles != "avoid":
+            return
+        if not inputs.safe:
+            self.forget_low()        # căzut: poza și odometria nu mai sunt de încredere
+            return
+        lo = cfg.low
+        now = inputs.now
+        can_remember = inputs.pos is not None and self.yaw is not None and lo.memory_seconds > 0
+        sx = self._sensor_forward(inputs)
+
+        found = low_obstacles(inputs.frame, inputs.pose, cfg) if inputs.frame is not None else []
+        if found:
+            if self._low_first is None:
+                self._low_first = now
+            confirmed = now - self._low_first >= lo.confirm_time
+        else:
+            self._low_first = None
+            confirmed = False
+
+        if confirmed:
+            for o in found:
+                self.low_items.append((o.forward, o.lateral))
+                if can_remember:
+                    self._remember(inputs, o.forward + sx, o.lateral, now)
+
+        if can_remember and self._memory:
+            c, s_ = math.cos(self.yaw), math.sin(self.yaw)
+            keep = []
+            for m in self._memory:
+                if now - m[2] > lo.memory_seconds:
+                    continue
+                dx, dy = m[0] - inputs.pos[0], m[1] - inputs.pos[1]
+                rx, ry = c * dx + s_ * dy, -s_ * dx + c * dy       # cadrul trunchiului
+                fwd = rx - sx
+                if fwd < -0.15 or fwd > 2.0:
+                    continue                                        # l-am depășit / prea departe
+                keep.append(m)
+                if confirmed and any(abs(o.forward - fwd) < 0.05 and abs(o.lateral - ry) < 0.05 for o in found):
+                    continue                                        # deja în lista curentă
+                self.low_items.append((fwd, ry))
+            self._memory = keep
+
+    def _remember(self, inputs: Inputs, rx: float, ry: float, now: float) -> None:
+        c, s_ = math.cos(self.yaw), math.sin(self.yaw)
+        wx = inputs.pos[0] + c * rx - s_ * ry
+        wy = inputs.pos[1] + s_ * rx + c * ry
+        for m in self._memory:
+            if abs(m[0] - wx) < 0.07 and abs(m[1] - wy) < 0.07:
+                m[0], m[1], m[2] = wx, wy, now
+                return
+        self._memory.append([wx, wy, now])
+        self.stats.low_seen += 1
+
+    def look(self, inputs: Inputs, threshold: float | None = None) -> View:
+        """Vederea din față: pereții din rândurile de sus + obiectele joase (văzute sau ținute minte)."""
+        o = self.cfg.obstacle
+        view = analyse(inputs.frame, o, threshold)
+        if not self.low_items:
+            return view
+        thr = o.stop_distance if threshold is None else threshold
+        hw = self.cfg.low.corridor_half_width
+        extra = self.cfg.low.extra_clearance
+        front, blocked = view.front, view.blocked
+        left_free, right_free = view.left_free, view.right_free
+        for f, lat in self.low_items:
+            if abs(lat) > hw:
+                continue
+            f -= extra    # tratat ca mai aproape: reacție mai fermă, fiindcă obiectul se vede doar scurt
+            front = f if front is None else min(front, f)
+            blocked = blocked or f < thr
+            if lat >= 0:
+                left_free = min(left_free, f)
+            else:
+                right_free = min(right_free, f)
+        return replace(view, blocked=blocked, front=front, left_free=left_free, right_free=right_free)
+
     def pick_turn(self, view: View) -> float:
         """+1 = stânga, -1 = dreapta: partea mai liberă; la egalitate, implicit."""
         side = view.freer_side
@@ -332,6 +430,7 @@ class Brain:
                 self.stats.forward_seconds += dt
         self._last_now = inputs.now
         self._track_yaw(inputs.yaw)
+        self._update_low(inputs)
 
         if not self._started:
             self._started = True

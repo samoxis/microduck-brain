@@ -19,6 +19,7 @@ stop_distance = 0.28      # sub această distanță în față (nu mai are loc) 
 slow_distance = 0.70      # între slow_distance și stop_distance virează din mers, mai tare cu cât e mai aproape
 steer_yaw_max = 0.8       # rotirea cerută (rad/s) a virajului din mers, la apropierea maximă (la stop_distance)
 steer_slew = 3.0          # cât de repede poate varia rotirea cerută (rad/s per s): fără smucituri
+low_obstacles = "avoid"   # "avoid" = ocolește cuburile/mingile din rândurile de jos; "ignore" = le ignoră (ca în v1)
 clear_distance = 0.40     # trebuie să vadă cel puțin atât liber ca să termine întoarcerea
 first_row = 0             # rândurile folosite din cadrul 8x8 (0 = sus). Cele de jos pot vedea podeaua.
 last_row = 4
@@ -32,6 +33,22 @@ min_turn_time = 0.5       # rotirea în loc durează cel puțin atât...
 min_turn_degrees = 20.0   # ...și parcurge cel puțin atâtea grade MĂSURATE (odom.yaw)
 max_turn_time = 6.0       # dacă nu se eliberează în atâta timp, renunță și numără ca eșec
 default_turn = "left"     # direcția când ambele părți sunt la fel de libere: left | right
+
+[low]
+# Obiecte joase: în rândurile de jos (peste last_row) se vede și podeaua. Se calculează distanța așteptată
+# pe podea goală, din poza senzorului din robot.state (frames.tof, safety.gravity, odom.position[2]);
+# o citire vizibil mai scurtă e un obiect. Valorile nominale sunt pentru robotul care nu trimite poza.
+nominal_height = 0.246            # înălțimea senzorului deasupra podelei, în picioare (m; măsurat în MuJoCo)
+nominal_pitch_deg = 0.0           # înclinarea nominală a senzorului în jos (grade)
+nominal_sensor_forward = 0.064    # cât de în față de originea trunchiului e senzorul (m)
+tilt_tolerance_deg = 1.5          # toleranță la eroarea de poză (sincronizare, legănat), cu poză
+tilt_tolerance_nopose_deg = 4.5   # fără poză: mai mare, acoperă ±3° pitch + ±3° roll odată (prinde mai puține obiecte)
+range_margin = 0.06               # marjă relativă (zgomotul senzorului + eroarea de înălțime)
+min_range = 0.10                  # citirile mai aproape de atât sunt zgomot (crosstalk), ignorate
+confirm_time = 0.12               # un obiect trebuie văzut continuu atâta timp (≈ 2 cadre) ca să conteze
+corridor_half_width = 0.15        # un obiect la mai puțin de atât lateral de axa robotului e „în drum" (m)
+memory_seconds = 12.0             # cât ține minte un obiect după ce iese din câmpul senzorului (0 = deloc)
+extra_clearance = 0.15            # un obiect jos se tratează ca fiind cu atâta mai aproape (m): se vede doar scurt, reacția trebuie să fie fermă
 
 [corner]
 turns_before_big_turn = 3 # tot atâtea ocoliri la rând fără să înainteze => întoarcere mare

@@ -65,6 +65,8 @@ class FakeRobot:
                             st = {
                                 "safety": {"fallen": outer.fallen, "limp": False, "gravity": [0, 0, -1]},
                                 "odom": {"position": [0.0, 0.0, 0.12], "yaw": wrapped},
+                                "frames": {"tof": {"pos": [0.0643, 0.0224, 0.126], "quat": [1, 0, 0, 0]}},
+                                "t_ns": time.monotonic_ns(),
                             }
                             self.wfile.write((json.dumps({"jsonrpc": "2.0", "method": "robot.state", "params": st}) + "\n").encode())
                             time.sleep(0.05)
@@ -79,7 +81,8 @@ class FakeRobot:
                     self.wfile.write((json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"accepted": True, "rows": 8, "cols": 8, "hz": 15}}) + "\n").encode())
                     while True:
                         f = outer.frame
-                        p = {"seq": 1, "at_us": 0, "rows": 8, "cols": 8, "distance_mm": list(f.distance_mm), "status": list(f.status)}
+                        p = {"seq": 1, "at_us": 0, "t_ns": time.monotonic_ns(), "rows": 8, "cols": 8,
+                             "distance_mm": list(f.distance_mm), "status": list(f.status)}
                         self.wfile.write((json.dumps({"jsonrpc": "2.0", "method": "tof.frame", "params": p}) + "\n").encode())
                         time.sleep(0.05)
 
@@ -196,3 +199,40 @@ def test_heading_hold_over_sockets_cancels_drift(robot):
     stop(runner, t)
     assert abs(robot.yaw - y0) < 0.35, "fără corecție ar fi ~0.7 rad în 6 s"
     assert any(abs(m["vyaw"]) > 0.01 for _, m in robot.moves), "corecția trebuie să apară în comenzi"
+
+
+def test_low_obstacle_is_avoided_over_sockets_and_ignored_in_ignore_mode(robot):
+    from .lowgeo import render
+
+    robot.frame = render(("cube", 0.6, 0.07))        # cub de 7 cm drept în față, vizibil în rândul 7
+
+    runner, t = start(robot, low={"memory_seconds": 0.0})
+    assert wait_for(lambda: any(m["vx"] > 0 and abs(m["vyaw"]) > 0.1 for _, m in robot.moves), 4), \
+        "trebuie să vireze din mers spre obiectul jos"
+    stop(runner, t)
+    assert runner.brain.stats.low_seen == 0           # memoria oprită: nimic reținut, obiectul e doar văzut
+
+    robot.moves.clear()
+    runner, t = start(robot, obstacle={"low_obstacles": "ignore"})
+    assert wait_for(lambda: any(m["vx"] > 0 for _, m in robot.moves), 3)
+    time.sleep(1.5)
+    stop(runner, t)
+    walking = [m for _, m in robot.moves if m["vx"] > 0]
+    assert walking and all(abs(m["vyaw"]) < 0.05 for m in walking), "în ignore nu virează"
+
+
+def test_runner_pairs_the_frame_with_the_nearest_state_pose(robot):
+    runner, t = start(robot)
+    assert wait_for(lambda: runner.inputs(runner.clock()).pose is not None, 3)
+    pose = runner.inputs(runner.clock()).pose
+    assert pose.sensor_pos == (0.0643, 0.0224, 0.126) and pose.trunk_z == 0.12
+    stop(runner, t)
+
+
+def test_runner_drops_a_pose_that_is_too_far_from_the_frame_in_time(robot):
+    runner, t = start(robot)
+    assert wait_for(lambda: runner.inputs(runner.clock()).pose is not None, 3)
+    stop(runner, t)
+    with runner._lock:
+        runner._frame_t_ns += 5_000_000_000       # cadrul „din viitor": nicio poză la 100 ms
+    assert runner._pose_for_frame() is None

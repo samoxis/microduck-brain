@@ -11,11 +11,13 @@ Ce face:
 2. citește cadrele de adâncime 8×8; când un obstacol se apropie, **virează din mers** spre partea mai
    liberă, mai tare cu cât e mai aproape; se oprește de tot și se rotește pe loc doar când nu mai are
    loc (sub `stop_distance`);
-3. dacă ajunge de mai multe ori la frână fără să apuce să meargă înainte (colț), face o întoarcere
+3. **vede obiecte joase** (cuburi, mingi) în rândurile de jos ale cadrului și le ocolește; comutator
+   `low_obstacles = "avoid" | "ignore"` (vezi mai jos, inclusiv limita geometrică);
+4. dacă ajunge de mai multe ori la frână fără să apuce să meargă înainte (colț), face o întoarcere
    mare; **rotirile se măsoară din `odom.yaw`**, nu din timp;
-4. dacă robotul raportează că a căzut sau că nu e sănătos, **nu mai trimite comenzi de mers** până e
+5. dacă robotul raportează că a căzut sau că nu e sănătos, **nu mai trimite comenzi de mers** până e
    din nou în picioare (și mai așteaptă `resume_delay`);
-5. la Ctrl+C (sau SIGTERM) trimite `robot.stop` și iese curat, cu un rezumat.
+6. la Ctrl+C (sau SIGTERM) trimite `robot.stop` și iese curat, cu un rezumat.
 
 ## Pornire pe PC (WSL Ubuntu)
 
@@ -80,7 +82,8 @@ sub ele politica nu pășește deloc. Dacă configurația cere mai puțin, la po
 | `steer_yaw_max` | rotirea cerută (rad/s) a virajului din mers, când obstacolul e la `stop_distance`. Nu are prag minim cunoscut: când mergi și virezi simultan, dacă robotul nu pare să vireze, ridic-o. |
 | `steer_slew` | cât de repede poate varia rotirea cerută (rad/s pe secundă): fără smucituri. |
 | `clear_distance` | ca să termine întoarcerea trebuie să vadă liber cel puțin atât (mai mare decât `stop_distance`, ca să nu oscileze). |
-| `first_row`, `last_row` | rândurile 8×8 folosite (0 = sus). Cele de jos pot vedea podeaua; în simulare, în picioare, podeaua apărea doar pe marginile rândurilor 5–7, deci 0–4 e sigur. |
+| `first_row`, `last_row` | rândurile 8×8 folosite ca „pereți" (0 = sus). Rândurile de după `last_row` (implicit 5–7) văd și podeaua și sunt tratate separat, ca obiecte joase (vezi `low_obstacles`). |
+| `low_obstacles` | `"avoid"` (implicit): obiectele joase din rândurile de jos sunt obstacole și sunt ocolite. `"ignore"`: rândurile de jos sunt ignorate, ca în v1 (robotul le împinge). Se schimbă doar în fișier; când vei vrea să se joace cu ele, aici se va adăuga o a treia valoare. |
 | `front_first_col`, `front_last_col` | coloanele care contează „în față” (0 = stânga). Implicit 1–6: marginile (0 și 7) nu opresc robotul. |
 | `min_zones` | câte zone trebuie să fie aproape ca să conteze ca obstacol. 2 taie zgomotul de o singură zonă. |
 | `blind_fraction` | dacă sub atâta din zonele din față dau o măsurătoare validă (senzor orb, perete lipit de el), se tratează ca obstacol. |
@@ -89,6 +92,39 @@ sub ele politica nu pășește deloc. Dacă configurația cere mai puțin, la po
 | `min_turn_time`, `min_turn_degrees` | rotirea în loc durează cel puțin atât și parcurge cel puțin atâtea grade **măsurate**. |
 | `max_turn_time` | dacă rotirea în loc nu se eliberează în atâta timp, renunță și face întoarcerea mare. |
 | `default_turn` | `left` sau `right`: direcția când ambele părți sunt la fel de libere. |
+
+### `[low]` — obiecte joase
+**Cum funcționează.** În rândurile de jos senzorul vede și podeaua. Pentru fiecare zonă se calculează
+distanța pe care ar măsura-o pe podea goală: `înălțimea senzorului / cât de mult privește raza în jos`.
+Înălțimea și „în jos" vin din `robot.state` (`frames.tof`, `safety.gravity`, `odom.position[2]`),
+asociate cadrului după `t_ns`, deci înclinarea capului și a trunchiului la fiecare pas e compensată
+exact. O citire vizibil mai scurtă decât podeaua (cu marjă) e un obiect.
+
+**De ce geometrie, nu autocalibrare.** Înclinarea se schimbă la fiecare pas, deci o calibrare fixă ar
+fi greșită, iar una care o urmărește e tot geometrie; iar „podea liberă" nu poate fi recunoscută dinainte
+fără să știi deja ce e podea (un perete lung ar fi învățat ca podea). Aceeași geometrie o folosește
+filtrul de podea al lui `robotd`. Măsurat pe senzorul simulat: modelul se potrivește cu abatere
+standard 0,8% (maxim 2,8%).
+
+**Limita geometrică, de știut.** În picioare, cu capul drept, senzorul e la 24,6 cm și raza cea mai de
+jos coboară 19,7°. Un cub de 7 cm se vede doar de la ~45 cm de trunchi, în 1–2 zone, cu citirea la
+70–85% din distanța podelei; o minge de 8 cm la fel, dar la 0,6–0,7 m poate cădea între raze. Mai
+aproape de ~45 cm obiectul e **sub cea mai de jos rază** și cadrul e identic cu o podea goală (verificat
+pe cadre MuJoCo). De aceea creierul **ține minte** obiectul văzut, în coordonate odom, și îl
+ocolește și după ce a ieșit din câmp (`memory_seconds`). Un obiect care n-a fost văzut niciodată de la
+distanță (apărut sub nivelul razelor) nu poate fi detectat.
+
+| Cheie | Ce face |
+|---|---|
+| `nominal_height`, `nominal_pitch_deg`, `nominal_sensor_forward` | geometria presupusă dacă robotul nu trimite poza (măsurat în MuJoCo, STAND). Înălțimea senzorului, înclinarea lui în jos, cât de în față de originea trunchiului e. |
+| `tilt_tolerance_deg` | eroare de poză acceptată cu poză (sincronizare, legănat): podeaua se socotește cu senzorul înclinat cu atât mai mult în jos. |
+| `tilt_tolerance_nopose_deg` | la fel, fără poză; trebuie să acopere ±3° pitch plus ±3° roll odată (4,5). Prinde mai puține obiecte. |
+| `range_margin` | marjă relativă sub podea (zgomotul senzorului ≈ 0,8%, eroarea de înălțime). |
+| `min_range` | citirile mai aproape de atât (înainte) sunt zgomot de apropiere și sunt ignorate. |
+| `confirm_time` | un obiect trebuie văzut continuu atâta timp (≈ 2 cadre la 15 Hz) ca să conteze; un singur cadru zgomotos nu virează robotul. |
+| `corridor_half_width` | un obiect la mai puțin de atât lateral de axa robotului e „în drum". |
+| `memory_seconds` | cât ține minte un obiect după ce iese din câmp. 0 = fără memorie. Se șterge la cădere. |
+| `extra_clearance` | obiectul jos se tratează ca fiind cu atâta mai aproape; obiectul se vede doar scurt, deci reacția trebuie să fie fermă. 0,15 dă ~5 cm spațiu în teste, fără frână; la 0 abia scapă; la 0,30 începe să frâneze degeaba. |
 
 ### `[corner]`
 | Cheie | Ce face |
@@ -144,12 +180,21 @@ căzut / nesănătos / fără adâncime => `hold`.
 înregistrată cu `brain.register(...)`. Dacă nu are nevoie de adâncime, `needs_depth = False`.
 Detalii în docstring-ul din `brain.py`.
 
-## Limite cunoscute (v0)
+## Fixture-uri MuJoCo
+
+`tests/fixtures/mujoco_low.json` conține cadre reale din senzorul simulat (podea goală cu trunchiul
+înclinat, cuburi și mingi la distanțe diferite), cu poza raportată. Se regenerează cu venv-ul lui
+`microduck_rl`: `cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py`.
+
+## Limite cunoscute
 
 * Dacă robotul a căzut, creierul **doar așteaptă**; nu încearcă să-l ridice.
 * Regulatorul de direcție și virajul din mers au valori inițiale **neacordate pe mers real**
   (`kp`, `ki`, `steer_yaw_max`, `slow_distance`); testele le verifică doar pe un model simplu.
 * Dacă politica ignoră comenzi mici de rotire cât merge, corecția de direcție poate fi înghițită.
-* Nu vede obstacole sub nivelul rândurilor folosite (praguri, obiecte joase) și nici sticlă.
+* Nu vede obiecte jos care apar sub cea mai de jos rază fără să fi fost văzute de la distanță (vezi `[low]`).
+* Nu detectează goluri (podeaua mai departe decât se așteaptă, ex. capătul unei scări în jos) și nici sticlă.
+* Obiectele joase văzute doar de la mare distanță pot fi ratate între raze (mingea de 8 cm la ~0,7 m).
+* Memoria folosește `odom.position` (x, y); se presupune că `odom.yaw` crește spre stânga, ca în v1.
 * Orientarea senzorului (coloana 0 = stânga) e luată din simulator și din `tofd`; pe robotul real
   merită verificată.
