@@ -15,7 +15,10 @@ turn_speed = 1.4          # viteza de întoarcere ceruta (rad/s)
 big_turn_speed = 1.4      # viteza la întoarcerea mare ceruta (rad/s)
 
 [obstacle]
-stop_distance = 0.28      # sub această distanță în față => se oprește
+stop_distance = 0.28      # sub această distanță în față (nu mai are loc) => se oprește de tot și se rotește pe loc
+slow_distance = 0.70      # între slow_distance și stop_distance virează din mers, mai tare cu cât e mai aproape
+steer_yaw_max = 0.8       # rotirea cerută (rad/s) a virajului din mers, la apropierea maximă (la stop_distance)
+steer_slew = 3.0          # cât de repede poate varia rotirea cerută (rad/s per s): fără smucituri
 clear_distance = 0.40     # trebuie să vadă cel puțin atât liber ca să termine întoarcerea
 first_row = 0             # rândurile folosite din cadrul 8x8 (0 = sus). Cele de jos pot vedea podeaua.
 last_row = 4
@@ -25,14 +28,25 @@ min_zones = 2             # câte zone trebuie să fie aproape ca să conteze (t
 blind_fraction = 0.5      # dacă sub atâta din zone dau o măsurătoare, e „orb” => tratat ca obstacol
 max_range = 4.0           # „nimic în raza senzorului” se socotește la această distanță
 stop_pause = 0.3          # cât stă pe loc înainte să înceapă întoarcerea
-min_turn_time = 0.5       # întoarcerea durează cel puțin atât
+min_turn_time = 0.5       # rotirea în loc durează cel puțin atât...
+min_turn_degrees = 20.0   # ...și parcurge cel puțin atâtea grade MĂSURATE (odom.yaw)
 max_turn_time = 6.0       # dacă nu se eliberează în atâta timp, renunță și numără ca eșec
 default_turn = "left"     # direcția când ambele părți sunt la fel de libere: left | right
 
 [corner]
 turns_before_big_turn = 3 # tot atâtea ocoliri la rând fără să înainteze => întoarcere mare
 progress_time = 3.0       # cât trebuie să meargă înainte nestingherit ca să se reseteze numărătoarea
-big_turn_degrees = 280.0  # cronometrat la viteza CERUTA; rata se roteste real cam la jumatate, deci 280 cerut = ~150 real
+big_turn_degrees = 160.0  # unghiul întoarcerii mari, MĂSURAT din odom.yaw (nu cronometrat)
+big_turn_max_time = 15.0  # siguranță: dacă unghiul nu e atins în atâta timp, renunță (odometrie blocată / semn greșit)
+fallback_turn_efficiency = 0.5  # doar dacă robotul nu raportează odom.yaw: cronometrează presupunând atâta din rata cerută
+
+[heading]
+# Cât merge drept, ține direcția cu odom.yaw (un regulator PI mic peste vyaw).
+enabled = true
+kp = 2.0                  # rad/s de corecție per rad de eroare
+ki = 0.3                  # compensează deriva constantă (stânga/dreapta) a mersului
+max_correction = 0.5      # corecția maximă adăugată la rotire (rad/s)
+yaw_sign = 1.0            # 1 = odom.yaw crește spre stânga (ca vyaw); -1 dacă ai găsit invers
 
 [safety]
 tof_timeout = 0.5         # cadru de adâncime mai vechi de atât => oprit

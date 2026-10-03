@@ -53,6 +53,7 @@ class View:
     blocked: bool          # obstacol în coridorul din față (sau senzor orb)
     blind: bool            # prea puține zone măsurate ca să ne încredem
     nearest_front: float | None
+    front: float | None    # distanța „robustă" în față: a min_zones-a cea mai mică (taie zgomotul)
     left_free: float       # cât de liberă e partea stângă (m, mai mare = mai liber)
     right_free: float
 
@@ -87,22 +88,21 @@ def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None) ->
     rows = range(cfg.first_row, cfg.last_row + 1)
     front_cols = range(cfg.front_first_col, cfg.front_last_col + 1)
 
-    measured = 0
-    near = 0
-    nearest: float | None = None
+    ranges: list[float] = []
     for r in rows:
         for c in front_cols:
             d = frame.zone(r, c, cfg.max_range)
-            if d is None:
-                continue
-            measured += 1
-            nearest = d if nearest is None else min(nearest, d)
-            if d < threshold:
-                near += 1
+            if d is not None:
+                ranges.append(d)
+    ranges.sort()
+    nearest = ranges[0] if ranges else None
 
     total = len(rows) * len(front_cols)
-    blind = measured < cfg.blind_fraction * total
-    blocked = blind or near >= cfg.min_zones
+    blind = len(ranges) < cfg.blind_fraction * total
+    k = max(1, cfg.min_zones)
+    # a k-a cea mai mică distanță: „obstacol" înseamnă cel puțin k zone mai aproape decât pragul
+    front = ranges[k - 1] if len(ranges) >= k else (cfg.max_range if ranges else None)
+    blocked = blind or (front is not None and front < threshold)
 
     # Cât de liber e fiecare jumătate: media celor mai apropiate distanțe pe coloană.
     # Zonele eșuate nu contează; o jumătate fără nicio măsurătoare e 0 (nu o alegem).
@@ -110,4 +110,4 @@ def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None) ->
     right = _column_minima(frame, cfg, range(4, 8))
     left_free = sum(left) / len(left) if left else 0.0
     right_free = sum(right) / len(right) if right else 0.0
-    return View(blocked, blind, nearest, left_free, right_free)
+    return View(blocked, blind, nearest, front, left_free, right_free)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import socketserver
 import threading
 import time
@@ -24,7 +25,25 @@ class FakeRobot:
         self.frame = clear()
         self.moves: list[tuple[float, dict]] = []
         self.stops = 0
+        # „corpul": rotirea reală = eff x cerută (+ deriva cât merge); raportat ca odom.yaw
+        self.eff = 0.5
+        self.bias = 0.0
+        self.yaw = 0.0                      # nedesfășurat
+        self.yaw_log: list[float] = []      # yaw-ul real în momentul fiecărei comenzi
+        self._closed = False
         outer = self
+
+        def body():
+            last = time.monotonic()
+            while not outer._closed:
+                time.sleep(0.01)
+                now = time.monotonic()
+                dt, last = now - last, now
+                if outer.moves and now - outer.moves[-1][0] < 0.5:     # deadman ca la robotd
+                    m = outer.moves[-1][1]
+                    outer.yaw += (outer.eff * m["vyaw"] + (outer.bias if m["vx"] > 0 else 0.0)) * dt
+
+        threading.Thread(target=body, daemon=True).start()
 
         class RobotH(socketserver.StreamRequestHandler):
             def handle(self):
@@ -33,6 +52,7 @@ class FakeRobot:
                     m, id_ = msg["method"], msg.get("id")
                     if m == "robot.move":
                         outer.moves.append((time.monotonic(), msg["params"]))
+                        outer.yaw_log.append(outer.yaw)
                     elif m == "robot.stop":
                         outer.stops += 1
                         self._reply(id_, {"accepted": True})
@@ -41,7 +61,11 @@ class FakeRobot:
                     elif m == "robot.subscribe":
                         self._reply(id_, {"accepted": True})
                         while True:
-                            st = {"safety": {"fallen": outer.fallen, "limp": False, "gravity": [0, 0, -1]}}
+                            wrapped = (outer.yaw + math.pi) % (2 * math.pi) - math.pi
+                            st = {
+                                "safety": {"fallen": outer.fallen, "limp": False, "gravity": [0, 0, -1]},
+                                "odom": {"position": [0.0, 0.0, 0.12], "yaw": wrapped},
+                            }
                             self.wfile.write((json.dumps({"jsonrpc": "2.0", "method": "robot.state", "params": st}) + "\n").encode())
                             time.sleep(0.05)
 
@@ -67,6 +91,7 @@ class FakeRobot:
             threading.Thread(target=s.serve_forever, daemon=True).start()
 
     def close(self):
+        self._closed = True
         for s in self.servers:
             s.shutdown()
             s.server_close()
@@ -138,3 +163,36 @@ def test_unhealthy_robot_gets_no_walk_commands(robot):
     time.sleep(1.0)
     stop(runner, t)
     assert not any(m["vx"] > 0 for _, m in robot.moves)
+
+
+def test_big_turn_closed_loop_over_sockets_uses_the_measured_angle(robot):
+    """Robotul fals se rotește doar cu 50% din rata cerută: un cronometru l-ar opri la jumătate."""
+    robot.frame = wall_ahead()
+    runner, t = start(
+        robot,
+        corner={"turns_before_big_turn": 1, "big_turn_degrees": 90.0},
+        motion={"big_turn_speed": 1.4},
+    )
+    # prima rotire în loc, continuă (vx == 0, vyaw != 0) până se oprește
+    def spinning():
+        return [i for i, (_, m) in enumerate(robot.moves) if m["vx"] == 0 and m["vyaw"] != 0]
+    assert wait_for(lambda: len(spinning()) > 5, 4)
+    first = spinning()[0]
+    robot.frame = clear()          # după întoarcere drumul e liber
+    assert wait_for(lambda: robot.moves[-1][1]["vx"] > 0, 8)
+    last_spin = max(i for i in spinning() if i < len(robot.moves) - 1)
+    stop(runner, t)
+    turned = abs(robot.yaw_log[last_spin] - robot.yaw_log[first])
+    assert math.radians(85) <= turned <= math.radians(110), f"{math.degrees(turned):.0f}°"
+
+
+def test_heading_hold_over_sockets_cancels_drift(robot):
+    robot.bias = 0.12
+    robot.frame = clear()
+    runner, t = start(robot)
+    assert wait_for(lambda: len(robot.moves) > 10)
+    y0 = robot.yaw
+    time.sleep(6.0)
+    stop(runner, t)
+    assert abs(robot.yaw - y0) < 0.35, "fără corecție ar fi ~0.7 rad în 6 s"
+    assert any(abs(m["vyaw"]) > 0.01 for _, m in robot.moves), "corecția trebuie să apară în comenzi"

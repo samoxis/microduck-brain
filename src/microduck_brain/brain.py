@@ -3,12 +3,18 @@
 Logica de decizie e pură: ``Brain.tick(Inputs) -> Command``. Nu atinge socket-uri și nu
 citește ceasul (timpul vine în ``Inputs.now``), deci se testează cu cadre sintetice.
 
-Stări v0::
+Stări::
 
     hold ──(sigur + cadre de adâncime, după resume_delay)──> forward
-    forward ──(obstacol)──> brake ──> turn ──(liber)──> forward
-                              └─(prea multe ocoliri fără progres)──> bigturn ──> forward
+    forward ──(obstacol aproape)──> viră din mers spre partea liberă (tot în ``forward``)
+    forward ──(nu mai are loc: sub stop_distance)──> brake ──> turn ──(liber)──> forward
+                                                       └─(prea multe frâne fără progres)──> bigturn ──> forward
     orice stare ──(căzut / nesănătos / fără adâncime)──> hold
+
+``forward`` face două lucruri: cât drumul e liber ține direcția cu ``odom.yaw`` (corectează deriva),
+iar când un obstacol se apropie (între ``slow_distance`` și ``stop_distance``) virează din mers,
+mai tare cu cât e mai aproape. Doar dacă nu mai are loc (sub ``stop_distance``) frânează și se
+rotește pe loc. ``turn`` și ``bigturn`` măsoară unghiul din ``odom.yaw``, nu din timp.
 
 **Cum adaugi o stare nouă** (dans, odihnă...): scrie o clasă cu ``name`` și
 ``step(brain, inputs) -> (Command, next_name | None)``, opțional ``enter``, și
@@ -33,6 +39,7 @@ class Inputs:
     frame: DepthFrame | None      # None = nu există cadru proaspăt
     safe: bool                    # robotul e în picioare și sănătos
     safe_reason: str = ""         # de ce nu e sigur (pentru log)
+    yaw: float | None = None      # odom.yaw (rad, + = stânga) sau None dacă robotul nu îl raportează
 
 
 @dataclass(frozen=True)
@@ -52,7 +59,8 @@ def move(vx: float, vyaw: float) -> Command:
 
 @dataclass
 class Stats:
-    avoids: int = 0               # ocoliri începute (frână + întoarcere)
+    avoids: int = 0               # ocoliri începute (viraj din mers și/sau frână + întoarcere)
+    brakes: int = 0               # din ele, câte au ajuns la frână + rotire pe loc
     big_turns: int = 0
     turn_timeouts: int = 0        # întoarceri care nu s-au eliberat în max_turn_time
     holds_unsafe: int = 0         # opriri pentru cădere / nesănătos
@@ -85,6 +93,7 @@ class Hold(State):
     def enter(self, brain, inputs):
         self._ok_since = None
         self._stop_sent = False
+        brain.heading_integral = 0.0
 
     def step(self, brain, inputs):
         cmd = NONE
@@ -101,22 +110,77 @@ class Hold(State):
         return cmd, None
 
 
+def _closeness(front: float | None, cfg) -> float:
+    """0 = drum liber (dincolo de slow_distance), 1 = la stop_distance."""
+    o = cfg.obstacle
+    if front is None or o.slow_distance <= o.stop_distance:
+        return 0.0
+    return min(1.0, max(0.0, (o.slow_distance - front) / (o.slow_distance - o.stop_distance)))
+
+
 class Forward(State):
+    """Merge înainte. Drum liber: ține direcția. Obstacol aproape: viră din mers."""
+
     name = "forward"
 
     def enter(self, brain, inputs):
-        self.since = inputs.now
+        self._last = inputs.now
+        self._yaw_cmd = 0.0
+        self._straight = False
 
     def step(self, brain, inputs):
-        view = analyse(inputs.frame, brain.cfg.obstacle)
-        if not view.blocked:
-            return move(brain.cfg.motion.forward_speed, 0.0), None
-        # A mers destul înainte de obstacolul ăsta? Atunci nu e colț, numărătoarea reîncepe.
-        if inputs.now - self.since >= brain.cfg.corner.progress_time:
-            brain.consecutive_avoids = 0
-        brain.consecutive_avoids += 1
-        brain.stats.avoids += 1
-        return STOP, "brake"
+        cfg = brain.cfg
+        dt = min(0.2, max(0.0, inputs.now - self._last))
+        self._last = inputs.now
+        view = analyse(inputs.frame, cfg.obstacle)
+
+        if view.blocked:
+            # Nu mai are loc: oprește-te de tot.
+            self._start_episode(brain, view)
+            brain.stats.brakes += 1
+            brain.consecutive_avoids += 1
+            return STOP, "brake"
+
+        c = _closeness(view.front, cfg)
+        if c > 0.0:
+            brain.clear_time = 0.0
+            self._start_episode(brain, view)
+            self._straight = False
+            target = brain.steer_sign * cfg.obstacle.steer_yaw_max * c
+        else:
+            brain.episode_open = False
+            brain.clear_time += dt
+            if brain.clear_time >= cfg.corner.progress_time:
+                brain.consecutive_avoids = 0   # a mers destul: nu e colț
+            if not self._straight:
+                # Drum liber din nou: direcția de acum devine direcția de ținut.
+                self._straight = True
+                brain.heading_target = brain.yaw
+            target = self._heading_correction(brain, dt)
+
+        # Netezește comanda de rotire: nicio schimbare bruscă.
+        step = cfg.obstacle.steer_slew * dt
+        self._yaw_cmd += max(-step, min(step, target - self._yaw_cmd))
+        return move(cfg.motion.forward_speed, self._yaw_cmd), None
+
+    @staticmethod
+    def _start_episode(brain, view) -> None:
+        if not brain.episode_open:
+            brain.episode_open = True
+            brain.stats.avoids += 1
+            brain.steer_sign = brain.pick_turn(view)
+
+    @staticmethod
+    def _heading_correction(brain, dt: float) -> float:
+        h = brain.cfg.heading
+        if not h.enabled or brain.yaw is None or brain.heading_target is None:
+            return 0.0
+        err = brain.heading_target - brain.yaw
+        limit = h.max_correction
+        if h.ki > 0:
+            brain.heading_integral = max(-limit / h.ki, min(limit / h.ki, brain.heading_integral + err * dt))
+        out = h.kp * err + h.ki * brain.heading_integral
+        return max(-limit, min(limit, out))
 
 
 class Brake(State):
@@ -132,6 +196,7 @@ class Brake(State):
             return move(0.0, 0.0), None
         view = analyse(inputs.frame, brain.cfg.obstacle)
         brain.turn_sign = brain.pick_turn(view)
+        brain.steer_sign = brain.turn_sign
         if brain.consecutive_avoids >= brain.cfg.corner.turns_before_big_turn:
             brain.consecutive_avoids = 0
             brain.stats.big_turns += 1
@@ -139,18 +204,33 @@ class Brake(State):
         return move(0.0, 0.0), "turn"
 
 
-class Turn(State):
-    """Se întoarce spre partea mai liberă până vede liber în față."""
-
-    name = "turn"
+class _Rotation(State):
+    """Bază pentru rotirile în loc: măsoară unghiul parcurs din odom.yaw."""
 
     def enter(self, brain, inputs):
         self.since = inputs.now
+        self.yaw0 = brain.yaw
+
+    def turned(self, brain) -> float | None:
+        """Unghiul parcurs în direcția rotirii (rad, >= 0 dacă merge bine), sau None fără odometrie."""
+        if self.yaw0 is None or brain.yaw is None:
+            return None
+        return brain.turn_sign * (brain.yaw - self.yaw0)
+
+
+class Turn(_Rotation):
+    """Se întoarce spre partea mai liberă până vede liber în față (și a parcurs unghiul minim)."""
+
+    name = "turn"
 
     def step(self, brain, inputs):
         cfg = brain.cfg
         elapsed = inputs.now - self.since
-        if elapsed >= cfg.obstacle.min_turn_time:
+        angle = self.turned(brain)
+        enough = elapsed >= cfg.obstacle.min_turn_time and (
+            angle is None or angle >= math.radians(cfg.obstacle.min_turn_degrees)
+        )
+        if enough:
             view = analyse(inputs.frame, cfg.obstacle, cfg.obstacle.clear_distance)
             if not view.blocked:
                 return move(0.0, 0.0), "forward"
@@ -163,18 +243,29 @@ class Turn(State):
         return move(0.0, brain.turn_sign * cfg.motion.turn_speed), None
 
 
-class BigTurn(State):
-    """Întoarcere mare, cronometrată, în loc."""
+class BigTurn(_Rotation):
+    """Întoarcere mare în loc, până la unghiul MĂSURAT (odom.yaw)."""
 
     name = "bigturn"
 
     def enter(self, brain, inputs):
-        m = brain.cfg.motion
-        self.since = inputs.now
-        self.duration = math.radians(brain.cfg.corner.big_turn_degrees) / m.big_turn_speed
+        super().enter(brain, inputs)
+        c = brain.cfg.corner
+        self.target = math.radians(c.big_turn_degrees)
+        # Fără odometrie: cronometrat, presupunând că robotul face doar o parte din rata cerută.
+        self.fallback = self.target / (brain.cfg.motion.big_turn_speed * c.fallback_turn_efficiency)
 
     def step(self, brain, inputs):
-        if inputs.now - self.since >= self.duration:
+        elapsed = inputs.now - self.since
+        angle = self.turned(brain)
+        if angle is not None:
+            done = angle >= self.target
+        else:
+            done = elapsed >= self.fallback
+        if not done and elapsed >= brain.cfg.corner.big_turn_max_time:
+            brain.stats.turn_timeouts += 1   # unghiul nu a crescut: odometrie blocată sau semn greșit
+            done = True
+        if done:
             return move(0.0, 0.0), "forward"
         return move(0.0, brain.turn_sign * brain.cfg.motion.big_turn_speed), None
 
@@ -185,6 +276,13 @@ class Brain:
         self.stats = Stats()
         self.consecutive_avoids = 0
         self.turn_sign = 1.0 if cfg.obstacle.default_turn == "left" else -1.0
+        self.steer_sign = self.turn_sign
+        self.episode_open = False       # ocolirea curentă a fost deja numărată
+        self.clear_time = 0.0           # cât a mers fără obstacol, continuu
+        self.yaw: float | None = None   # odom.yaw desfășurat (fără salt la ±pi), + = stânga
+        self._raw_yaw: float | None = None
+        self.heading_target: float | None = None
+        self.heading_integral = 0.0
         self.states: dict[str, State] = {}
         for s in (Hold(), Forward(), Brake(), Turn(), BigTurn()):
             self.register(s)
@@ -199,6 +297,19 @@ class Brain:
     @property
     def state_name(self) -> str:
         return self.state.name
+
+    def _track_yaw(self, raw: float | None) -> None:
+        if raw is None:
+            self.yaw = None
+            self._raw_yaw = None
+            return
+        raw *= self.cfg.heading.yaw_sign
+        if self._raw_yaw is None or self.yaw is None:
+            self.yaw = raw
+        else:
+            d = (raw - self._raw_yaw + math.pi) % (2 * math.pi) - math.pi
+            self.yaw += d
+        self._raw_yaw = raw
 
     def pick_turn(self, view: View) -> float:
         """+1 = stânga, -1 = dreapta: partea mai liberă; la egalitate, implicit."""
@@ -220,6 +331,7 @@ class Brain:
             if n == "forward":
                 self.stats.forward_seconds += dt
         self._last_now = inputs.now
+        self._track_yaw(inputs.yaw)
 
         if not self._started:
             self._started = True

@@ -41,11 +41,12 @@ class Runner:
         self._fallen = False
         self._limp = False
         self._state_at = -1e9
+        self._yaw: float | None = None
         self._healthy = False
         self._health_reason = "încă nu am întrebat"
         self._health_at = -1e9
         self.tof = Stream(tof_sock, "tof.stream", None, self._on_tof, self.stop_event)
-        self.state = Stream(robot_sock, "robot.subscribe", {"hz": 10}, self._on_state, self.stop_event)
+        self.state = Stream(robot_sock, "robot.subscribe", {"hz": 25}, self._on_state, self.stop_event)
 
     # --- fluxuri ---------------------------------------------------------
     def _on_tof(self, method: str, params: dict) -> None:
@@ -65,6 +66,8 @@ class Runner:
         with self._lock:
             self._fallen = bool(safety.get("fallen", False))
             self._limp = bool(safety.get("limp", False))
+            yaw = (params.get("odom") or {}).get("yaw")
+            self._yaw = float(yaw) if isinstance(yaw, (int, float)) else None
             self._state_at = self.clock()
 
     # --- intrări ---------------------------------------------------------
@@ -89,6 +92,7 @@ class Runner:
             frame = self._frame if now - self._frame_at <= s.tof_timeout else None
             fallen, limp = self._fallen, self._limp
             state_age = now - self._state_at
+            yaw = self._yaw if state_age <= s.state_timeout else None
         reason = ""
         if state_age > s.state_timeout:
             reason = "fără robot.state"
@@ -98,7 +102,7 @@ class Runner:
             reason = "robotul e limp"
         elif not self._healthy:
             reason = self._health_reason
-        return Inputs(now=now, frame=frame, safe=not reason, safe_reason=reason)
+        return Inputs(now=now, frame=frame, safe=not reason, safe_reason=reason, yaw=yaw)
 
     # --- ieșire ----------------------------------------------------------
     def _send(self, cmd) -> None:
@@ -148,8 +152,8 @@ class Runner:
                     last_log = t0
                     st = self.brain.stats
                     log.info(
-                        "stare=%s ocoliri=%d întoarceri_mari=%d opriri_siguranță=%d mers=%.0fs",
-                        name, st.avoids, st.big_turns, st.holds_unsafe, st.forward_seconds,
+                        "stare=%s ocoliri=%d (frâne=%d) întoarceri_mari=%d opriri_siguranță=%d mers=%.0fs",
+                        name, st.avoids, st.brakes, st.big_turns, st.holds_unsafe, st.forward_seconds,
                     )
                 self.stop_event.wait(max(0.0, period - (self.clock() - t0)))
         finally:

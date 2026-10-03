@@ -13,6 +13,20 @@ from . import config as config_mod
 from .runner import Runner, default_sockets
 
 
+def log_config_warnings(cfg) -> list[str]:
+    """Scrie clar, la pornire, orice viteză din configurație sub pragul la care robotul pășește."""
+    warnings = config_mod.speed_warnings(cfg)
+    for w in warnings:
+        logging.warning("ATENȚIE: %s", w)
+    if warnings:
+        logging.warning(
+            "ATENȚIE: pragurile minime (%.2f m/s înainte, %.1f rad/s rotire) sunt măsurate în simulare; "
+            "corectează brain.toml, altfel robotul nu se va mișca.",
+            config_mod.MIN_FORWARD_SPEED, config_mod.MIN_TURN_SPEED,
+        )
+    return warnings
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="microduck-brain", description="Creier autonom v0 pentru Microduck")
     ap.add_argument("--config", "-c", help="fișier TOML (implicit: valorile din brain.toml, dacă există în directorul curent)")
@@ -39,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"configurație invalidă: {e}", file=sys.stderr)
         return 2
 
+    log_config_warnings(cfg)
     robot, tof = default_sockets(cfg)
     robot = args.robot_socket or robot
     tof = args.tof_socket or tof
@@ -65,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     summary = {
         "durata_s": round(time.monotonic() - started, 1),
         "ocoliri": st.avoids,
+        "ocoliri_cu_franare": st.brakes,
         "intoarceri_mari": st.big_turns,
         "intoarceri_expirate": st.turn_timeouts,
         "opriri_cadere_sau_nesanatos": st.holds_unsafe,
