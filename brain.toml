@@ -8,9 +8,11 @@ robot = ""
 tof = ""
 
 [motion]
-forward_speed = 0.10      # viteza de mers înainte (m/s). Robotul acceptă până la ~0.3.
-turn_speed = 0.6          # viteza de întoarcere (rad/s)
-big_turn_speed = 0.8      # viteza la întoarcerea mare (rad/s)
+# Masurat in simulare pe 2026-10-03: sub ~0.20 m/s si sub ~1.1 rad/s rata NU paseste deloc (sta pe loc).
+# Viteza reala e mai mica decat cea ceruta: 0.24 cerut = ~0.10 m/s real; 1.4 cerut = ~0.65-0.97 rad/s real.
+forward_speed = 0.24      # viteza de mers înainte ceruta (m/s). Robotul acceptă până la ~0.3.
+turn_speed = 1.4          # viteza de întoarcere ceruta (rad/s)
+big_turn_speed = 1.4      # viteza la întoarcerea mare ceruta (rad/s)
 
 [obstacle]
 stop_distance = 0.28      # sub această distanță în față => se oprește
@@ -30,7 +32,7 @@ default_turn = "left"     # direcția când ambele părți sunt la fel de libere
 [corner]
 turns_before_big_turn = 3 # tot atâtea ocoliri la rând fără să înainteze => întoarcere mare
 progress_time = 3.0       # cât trebuie să meargă înainte nestingherit ca să se reseteze numărătoarea
-big_turn_degrees = 160.0  # unghiul întoarcerii mari (cronometrat, nu măsurat)
+big_turn_degrees = 280.0  # cronometrat la viteza CERUTA; rata se roteste real cam la jumatate, deci 280 cerut = ~150 real
 
 [safety]
 tof_timeout = 0.5         # cadru de adâncime mai vechi de atât => oprit
