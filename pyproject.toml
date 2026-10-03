@@ -1,0 +1,23 @@
+[project]
+name = "microduck-brain"
+version = "0.1.0"
+description = "Creier autonom (v0) pentru Microduck: client al robotului prin JSON-RPC."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []  # doar biblioteca standard, intenționat
+
+[project.scripts]
+microduck-brain = "microduck_brain.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/microduck_brain"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

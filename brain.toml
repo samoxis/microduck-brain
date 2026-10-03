@@ -1,0 +1,43 @@
+# Configurația creierului. Toate valorile de aici sunt cele implicite;
+# poți șterge orice linie și revine la implicit. Chei necunoscute = eroare.
+# Distanțe în metri, viteze în m/s și rad/s, timpuri în secunde.
+
+[sockets]
+# Gol = se ghicește: simularea (~/.cache/duck-sim/...) dacă există, altfel /run/...
+robot = ""
+tof = ""
+
+[motion]
+forward_speed = 0.10      # viteza de mers înainte (m/s). Robotul acceptă până la ~0.3.
+turn_speed = 0.6          # viteza de întoarcere (rad/s)
+big_turn_speed = 0.8      # viteza la întoarcerea mare (rad/s)
+
+[obstacle]
+stop_distance = 0.28      # sub această distanță în față => se oprește
+clear_distance = 0.40     # trebuie să vadă cel puțin atât liber ca să termine întoarcerea
+first_row = 0             # rândurile folosite din cadrul 8x8 (0 = sus). Cele de jos pot vedea podeaua.
+last_row = 4
+front_first_col = 1       # coloanele care contează ca „în față” (0 = stânga senzorului)
+front_last_col = 6
+min_zones = 2             # câte zone trebuie să fie aproape ca să conteze (taie zgomotul)
+blind_fraction = 0.5      # dacă sub atâta din zone dau o măsurătoare, e „orb” => tratat ca obstacol
+max_range = 4.0           # „nimic în raza senzorului” se socotește la această distanță
+stop_pause = 0.3          # cât stă pe loc înainte să înceapă întoarcerea
+min_turn_time = 0.5       # întoarcerea durează cel puțin atât
+max_turn_time = 6.0       # dacă nu se eliberează în atâta timp, renunță și numără ca eșec
+default_turn = "left"     # direcția când ambele părți sunt la fel de libere: left | right
+
+[corner]
+turns_before_big_turn = 3 # tot atâtea ocoliri la rând fără să înainteze => întoarcere mare
+progress_time = 3.0       # cât trebuie să meargă înainte nestingherit ca să se reseteze numărătoarea
+big_turn_degrees = 160.0  # unghiul întoarcerii mari (cronometrat, nu măsurat)
+
+[safety]
+tof_timeout = 0.5         # cadru de adâncime mai vechi de atât => oprit
+state_timeout = 1.0       # flux robot.state mai vechi de atât => considerat nesigur
+health_poll = 1.0         # cât de des întreabă robot.health
+resume_delay = 1.5        # după ce robotul e iar în picioare, așteaptă atât înainte de mers
+
+[loop]
+rate_hz = 20.0            # cât de des trimite robot.move (robotul oprește singur după ~0.5 s fără comenzi)
+log_every = 5.0           # la câte secunde scrie o linie de stare (0 = deloc)
