@@ -46,7 +46,9 @@ These came out of measuring rather than assuming, and each one changed the desig
 
 1. **The policy has a dead zone.** Below 0.20 m/s forward or 1.1 rad/s turning the walking policy
    doesn't step at all; the first version (0.10 m/s) just stood still. The thresholds now live in the
-   code and the brain warns at startup if the config is below them.
+   code and the brain warns at startup if the config is below them. The turning threshold, the
+   real/commanded ratios and the drift were added to the upstream report,
+   [pollen-robotics/microduck_rl#59](https://github.com/pollen-robotics/microduck_rl/issues/59).
 2. **Turns must be measured, not timed.** The robot turns at roughly half the commanded rate, so a
    timed 160° turn came out around 80°. Turns now close the loop on `odom.yaw`.
 3. **A 7 cm cube is invisible within ~45 cm.** Standing, the sensor is 24.6 cm high and level; its
@@ -57,7 +59,8 @@ These came out of measuring rather than assuming, and each one changed the desig
    stairwell, its far floor is already beyond the lowest beam's landing point at ~0.3 m, so the hole
    vanishes from view; drops are remembered for 120 s. (In the simulator a beam into the hole returns
    "nothing in range" because it passes under the floor slab; a real sensor would see the step as a
-   longer range — both count.)
+   longer range — both count. Reported upstream with a tested fix:
+   [pollen-robotics/microduck_rl#76](https://github.com/pollen-robotics/microduck_rl/issues/76).)
 5. **The foot of every wall looks like a low object.** The first closed-loop run reported 178 "low
    objects" in an apartment with 7 toys: 99.97% were wall bases seen by the bottom rows. A bottom-row
    reading now counts only if the wall rows above it are clear.
