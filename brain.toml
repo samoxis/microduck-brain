@@ -1,0 +1,92 @@
+# microduck-brain configuration. Every value here is the built-in default: delete any line and the
+# default applies. An unknown key is an error, not silently ignored.
+# Distances in metres, speeds in m/s and rad/s, times in seconds.
+
+[sockets]
+# Empty = auto: the simulator's sockets (~/.cache/duck-sim/...) if present, else the robot's (/run/...).
+robot = ""
+tof = ""
+
+[motion]
+# Measured in the full simulator with the official walking policies (2026-10-03): below ~0.20 m/s
+# forward and ~1.1 rad/s turning the policy does not step at all. Real speed is lower than commanded:
+# 0.24 commanded ≈ 0.10 m/s real; 1.4 commanded ≈ 0.65-0.97 rad/s real.
+forward_speed = 0.24      # commanded walking speed (m/s); the code warns below 0.20
+turn_speed = 1.4          # commanded turn rate when turning in place (rad/s); the code warns below 1.1
+big_turn_speed = 1.4      # commanded turn rate for the big (corner) turn (rad/s)
+
+[obstacle]
+stop_distance = 0.28      # closer than this ahead (no room left) => stop completely and turn in place
+slow_distance = 0.70      # between slow_distance and stop_distance: steer away while walking, harder when closer
+steer_yaw_max = 0.8       # commanded turn rate while steering, at the closest approach (rad/s)
+steer_slew = 3.0          # how fast the commanded turn rate may change (rad/s per s): no jerks
+low_obstacles = "avoid"   # "avoid" = go around cubes/balls seen in the bottom rows; "ignore" = don't look for them
+drops = "avoid"           # "avoid" = keep away from drops (ledges, stairs going down); "ignore" = don't look for them
+clear_distance = 0.40     # a turn ends only once at least this much is clear ahead
+first_row = 0             # frame rows used for walls (0 = top). Rows below last_row also see the floor:
+last_row = 4              # they are handled separately, as low objects and drops.
+corridor_half_width = 0.14 # "ahead" = any wall return within this of the robot's axis (m): the body's swept width + margin
+sensor_lateral = 0.0224   # the sensor sits this far left of the robot's axis (m; MJCF `tof` site)
+side_memory_seconds = 3.0 # remember wall returns near the body for this long: a chair leg leaves the field of view ~30 cm before passing the leg
+front_first_col = 1       # central columns used to decide whether the sensor is blind (0 = the sensor's left)
+front_last_col = 6
+min_zones = 2             # how many zones must be close for it to count (rejects single-zone noise)
+blind_fraction = 0.5      # if fewer than this fraction of zones return a measurement, the sensor is "blind" => obstacle
+max_range = 4.0           # "nothing in range" is taken to be this far
+stop_pause = 0.3          # stand still this long before starting to turn
+min_turn_time = 0.5       # a turn in place lasts at least this long...
+min_turn_degrees = 20.0   # ...and covers at least this many MEASURED degrees (odom.yaw)
+max_turn_time = 6.0       # if the way doesn't clear within this time, give up and do the big turn
+default_turn = "left"     # which way to turn when both sides are equally free: left | right
+
+[low]
+# Low objects: in the rows below last_row the floor is visible too. The range each zone would read on an
+# empty floor is computed from the sensor pose in robot.state (frames.tof, safety.gravity, odom.position[2]);
+# a clearly shorter reading is an object. The nominal values are used when the robot sends no pose.
+nominal_height = 0.246            # sensor height above the floor when standing (m; measured in MuJoCo)
+nominal_pitch_deg = 0.0           # nominal downward pitch of the sensor (degrees)
+nominal_sensor_forward = 0.064    # how far ahead of the trunk origin the sensor is (m)
+tilt_tolerance_deg = 1.5          # pose error tolerated with a pose (timing, gait sway)
+tilt_tolerance_nopose_deg = 4.5   # without a pose: wider, covers ±3° pitch and ±3° roll at once (catches fewer objects)
+range_margin = 0.06               # relative margin (sensor noise + height error)
+min_range = 0.10                  # readings closer than this are crosstalk noise and are ignored
+confirm_time = 0.12               # an object must be seen continuously this long (≈ 2 frames) to count
+corridor_half_width = 0.15        # an object closer than this to the robot's axis is "in the way" (m)
+memory_seconds = 12.0             # how long an object is remembered after leaving the sensor's view (0 = never)
+extra_clearance = 0.15            # a low object is treated as this much closer (m): it is visible only briefly, so react firmly
+wall_margin = 0.25                # a low reading with a wall row in the same column closer than reading + this is a wall's foot, not an object
+
+[drop]
+# Drops: where the floor should be clearly visible, "nothing in range" or a clearly longer range = the floor is missing.
+max_expected = 1.2        # only zones whose expected floor is closer than this (m): rows 6-7 when standing
+range_margin = 0.10       # how much longer than the furthest plausible floor (head tilted up) a reading must be
+min_zones = 2             # how many floor-less zones in the same frame (a single one is noise)
+confirm_time = 0.12       # seen continuously this long to count
+clearance = 0.45          # a drop is treated as this much closer (m): stop well before the edge
+corridor_half_width = 0.18
+memory_seconds = 120.0    # how long a drop is remembered (a hole doesn't go anywhere)
+
+[corner]
+turns_before_big_turn = 3 # this many full stops in a row without progress => big turn
+progress_time = 3.0       # walking with a clear way this long resets that count
+big_turn_degrees = 160.0  # the big turn's angle, MEASURED from odom.yaw (not timed)
+big_turn_max_time = 15.0  # safety: give up if the angle isn't reached in time (frozen odometry / wrong sign)
+fallback_turn_efficiency = 0.5  # only without odom.yaw: time the turn assuming this fraction of the commanded rate
+
+[heading]
+# While walking straight, hold the heading with odom.yaw (a small PI controller on vyaw).
+enabled = true
+kp = 2.0                  # rad/s of correction per rad of error
+ki = 0.3                  # cancels the gait's constant drift to one side
+max_correction = 0.5      # the most correction added to the turn rate (rad/s)
+yaw_sign = 1.0            # 1 = odom.yaw grows to the left (like vyaw, as the protocol states); -1 if reversed
+
+[safety]
+tof_timeout = 0.5         # a depth frame older than this => stop (never walk blind)
+state_timeout = 1.0       # robot.state silent this long => treated as unsafe
+health_poll = 1.0         # how often to ask robot.health
+resume_delay = 1.5        # once the robot is safe again (upright, healthy, depth frames), wait this long before walking
+
+[loop]
+rate_hz = 20.0            # how often robot.move is sent (the robot stops by itself after ~0.5 s without commands)
+log_every = 5.0           # seconds between status lines (0 = never)

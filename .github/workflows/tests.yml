@@ -1,0 +1,17 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install uv
+        run: pipx install uv
+      - name: Install Python 3.12 and the dev dependencies
+        run: uv sync --python 3.12
+      - name: Run the tests
+        run: uv run pytest -q
