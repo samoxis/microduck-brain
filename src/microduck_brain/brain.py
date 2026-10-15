@@ -1,27 +1,27 @@
-"""Mașina de stări a creierului.
+"""The brain's state machine.
 
-Logica de decizie e pură: ``Brain.tick(Inputs) -> Command``. Nu atinge socket-uri și nu
-citește ceasul (timpul vine în ``Inputs.now``), deci se testează cu cadre sintetice.
+The decision logic is pure: ``Brain.tick(Inputs) -> Command``. It touches no sockets and reads no
+clock (time arrives in ``Inputs.now``), so it is tested with synthetic and recorded frames.
 
-Stări::
+States::
 
-    hold ──(sigur + cadre de adâncime, după resume_delay)──> forward
-    forward ──(obstacol aproape)──> viră din mers spre partea liberă (tot în ``forward``)
-    forward ──(nu mai are loc: sub stop_distance)──> brake ──> turn ──(liber)──> forward
-                                                       └─(prea multe frâne fără progres)──> bigturn ──> forward
-    orice stare ──(căzut / nesănătos / fără adâncime)──> hold
+    hold ──(safe + depth frames, after resume_delay)──> forward
+    forward ──(obstacle approaching)──> steers away while walking (still ``forward``)
+    forward ──(no room left: under stop_distance)──> brake ──> turn ──(clear)──> forward
+                                                       └─(too many stops without progress)──> bigturn ──> forward
+    any state ──(fallen / unhealthy / no depth)──> hold
 
-``forward`` face două lucruri: cât drumul e liber ține direcția cu ``odom.yaw`` (corectează deriva),
-iar când un obstacol se apropie (între ``slow_distance`` și ``stop_distance``) virează din mers,
-mai tare cu cât e mai aproape. Doar dacă nu mai are loc (sub ``stop_distance``) frânează și se
-rotește pe loc. ``turn`` și ``bigturn`` măsoară unghiul din ``odom.yaw``, nu din timp.
+``forward`` does two things: while the way is clear it holds its heading with ``odom.yaw``
+(cancelling the gait's drift), and when an obstacle approaches (between ``slow_distance`` and
+``stop_distance``) it steers away while walking, harder the closer it gets. Only when there is no
+room left (under ``stop_distance``) does it stop and turn in place. ``turn`` and ``bigturn``
+measure the angle from ``odom.yaw`` rather than timing it.
 
-**Cum adaugi o stare nouă** (dans, odihnă...): scrie o clasă cu ``name`` și
-``step(brain, inputs) -> (Command, next_name | None)``, opțional ``enter``, și
-înregistreaz-o cu ``brain.register(MyState())``. Gardianul de siguranță din
-``Brain.tick`` rămâne deasupra tuturor stărilor: dacă robotul a căzut, orice stare
-e înlocuită cu ``hold``. O stare care *nu* are nevoie de adâncime (dans, odihnă)
-setează ``needs_depth = False``.
+**Adding a state** (dance, rest, ...): write a class with ``name`` and
+``step(brain, inputs) -> (Command, next_name | None)``, optionally ``enter``, and register it with
+``brain.register(MyState())``. The safety guard in ``Brain.tick`` sits above every state: if the
+robot falls, whatever state it was in is replaced by ``hold``. A state that does *not* need depth
+(dance, rest) sets ``needs_depth = False``.
 """
 
 from __future__ import annotations
@@ -36,13 +36,13 @@ from .hazards import LOW, HazardMap
 
 @dataclass(frozen=True)
 class Inputs:
-    now: float                    # secunde, ceas monoton
-    frame: DepthFrame | None      # None = nu există cadru proaspăt
-    safe: bool                    # robotul e în picioare și sănătos
-    safe_reason: str = ""         # de ce nu e sigur (pentru log)
-    yaw: float | None = None      # odom.yaw (rad, + = stânga) sau None dacă robotul nu îl raportează
-    pose: Pose | None = None      # poza senzorului din robot.state, pentru geometria podelei
-    pos: tuple[float, float] | None = None   # odom.position[0:2] (m), pentru memoria obiectelor joase
+    now: float                    # seconds, monotonic clock
+    frame: DepthFrame | None      # None = no fresh frame
+    safe: bool                    # the robot is upright and healthy
+    safe_reason: str = ""         # why it is not safe (for the log)
+    yaw: float | None = None      # odom.yaw (rad, + = left), or None if the robot doesn't report it
+    pose: Pose | None = None      # sensor pose from robot.state, for the floor geometry
+    pos: tuple[float, float] | None = None   # odom.position[0:2] (m), for the hazard memory
 
 
 @dataclass(frozen=True)
@@ -62,14 +62,14 @@ def move(vx: float, vyaw: float) -> Command:
 
 @dataclass
 class Stats:
-    avoids: int = 0               # ocoliri începute (viraj din mers și/sau frână + întoarcere)
-    brakes: int = 0               # din ele, câte au ajuns la frână + rotire pe loc
+    avoids: int = 0               # avoidance episodes started (steering while walking and/or stop + turn)
+    brakes: int = 0               # of those, how many needed a full stop and a turn in place
     big_turns: int = 0
-    low_seen: int = 0             # obiecte joase (cuburi, mingi) noi, văzute în rândurile de jos
-    drops_seen: int = 0           # goluri (margini, scări în jos) noi
-    turn_timeouts: int = 0        # întoarceri care nu s-au eliberat în max_turn_time
-    holds_unsafe: int = 0         # opriri pentru cădere / nesănătos
-    holds_no_depth: int = 0       # opriri pentru lipsa cadrelor de adâncime
+    low_seen: int = 0             # new low objects (cubes, balls) seen in the bottom rows
+    drops_seen: int = 0           # new drops (ledges, stairs going down)
+    turn_timeouts: int = 0        # turns that did not clear within max_turn_time
+    holds_unsafe: int = 0         # holds for a fall / unhealthy robot
+    holds_no_depth: int = 0       # holds for missing depth frames
     forward_seconds: float = 0.0
     state_seconds: dict[str, float] = field(default_factory=dict)
 
@@ -86,7 +86,7 @@ class State:
 
 
 class Hold(State):
-    """Nu trimite comenzi de mers. Iese doar după ce totul e bine un timp continuu."""
+    """Sends no walking commands. Leaves only after everything has been fine for a while."""
 
     name = "hold"
     needs_depth = False
@@ -99,7 +99,7 @@ class Hold(State):
         self._ok_since = None
         self._stop_sent = False
         brain.heading_integral = 0.0
-        brain.hazards.forget()   # după o cădere poziția odometriei nu mai e de încredere
+        brain.hazards.forget()   # after a fall the odometry's position can no longer be trusted
 
     def step(self, brain, inputs):
         cmd = NONE
@@ -117,7 +117,7 @@ class Hold(State):
 
 
 def _closeness(front: float | None, cfg) -> float:
-    """0 = drum liber (dincolo de slow_distance), 1 = la stop_distance."""
+    """0 = clear (beyond slow_distance), 1 = at stop_distance."""
     o = cfg.obstacle
     if front is None or o.slow_distance <= o.stop_distance:
         return 0.0
@@ -125,7 +125,7 @@ def _closeness(front: float | None, cfg) -> float:
 
 
 class Forward(State):
-    """Merge înainte. Drum liber: ține direcția. Obstacol aproape: viră din mers."""
+    """Walk forward. Clear way: hold the heading. Obstacle approaching: steer away while walking."""
 
     name = "forward"
 
@@ -141,7 +141,7 @@ class Forward(State):
         view = brain.look(inputs)
 
         if view.blocked:
-            # Nu mai are loc: oprește-te de tot.
+            # No room left: stop completely.
             self._start_episode(brain, view)
             brain.stats.brakes += 1
             brain.consecutive_avoids += 1
@@ -157,14 +157,14 @@ class Forward(State):
             brain.episode_open = False
             brain.clear_time += dt
             if brain.clear_time >= cfg.corner.progress_time:
-                brain.consecutive_avoids = 0   # a mers destul: nu e colț
+                brain.consecutive_avoids = 0   # walked far enough: not a corner
             if not self._straight:
-                # Drum liber din nou: direcția de acum devine direcția de ținut.
+                # Clear again: the current direction becomes the heading to hold.
                 self._straight = True
                 brain.heading_target = brain.yaw
             target = self._heading_correction(brain, dt)
 
-        # Netezește comanda de rotire: nicio schimbare bruscă.
+        # Slew-limit the turn command: no sudden jerks.
         step = cfg.obstacle.steer_slew * dt
         self._yaw_cmd += max(-step, min(step, target - self._yaw_cmd))
         return move(cfg.motion.forward_speed, self._yaw_cmd), None
@@ -190,7 +190,7 @@ class Forward(State):
 
 
 class Brake(State):
-    """Stă pe loc scurt, ca mersul să se oprească înainte de întoarcere."""
+    """Stand still briefly so the gait settles before turning."""
 
     name = "brake"
 
@@ -211,21 +211,21 @@ class Brake(State):
 
 
 class _Rotation(State):
-    """Bază pentru rotirile în loc: măsoară unghiul parcurs din odom.yaw."""
+    """Base for turns in place: measures the angle turned from odom.yaw."""
 
     def enter(self, brain, inputs):
         self.since = inputs.now
         self.yaw0 = brain.yaw
 
     def turned(self, brain) -> float | None:
-        """Unghiul parcurs în direcția rotirii (rad, >= 0 dacă merge bine), sau None fără odometrie."""
+        """Angle turned in the turning direction (rad, >= 0 when all is well), or None without odometry."""
         if self.yaw0 is None or brain.yaw is None:
             return None
         return brain.turn_sign * (brain.yaw - self.yaw0)
 
 
 class Turn(_Rotation):
-    """Se întoarce spre partea mai liberă până vede liber în față (și a parcurs unghiul minim)."""
+    """Turn towards the freer side until the way ahead is clear (and the minimum angle is covered)."""
 
     name = "turn"
 
@@ -241,7 +241,7 @@ class Turn(_Rotation):
             if not view.blocked:
                 return move(0.0, 0.0), "forward"
         if elapsed >= cfg.obstacle.max_turn_time:
-            # Nu se mai eliberează: e probabil un colț. Trecem direct la întoarcerea mare.
+            # It won't clear: probably a corner. Go straight to the big turn.
             brain.stats.turn_timeouts += 1
             brain.consecutive_avoids = 0
             brain.stats.big_turns += 1
@@ -250,7 +250,7 @@ class Turn(_Rotation):
 
 
 class BigTurn(_Rotation):
-    """Întoarcere mare în loc, până la unghiul MĂSURAT (odom.yaw)."""
+    """A big turn in place, to the MEASURED angle (odom.yaw)."""
 
     name = "bigturn"
 
@@ -258,7 +258,7 @@ class BigTurn(_Rotation):
         super().enter(brain, inputs)
         c = brain.cfg.corner
         self.target = math.radians(c.big_turn_degrees)
-        # Fără odometrie: cronometrat, presupunând că robotul face doar o parte din rata cerută.
+        # Without odometry: timed, assuming the robot achieves only part of the commanded rate.
         self.fallback = self.target / (brain.cfg.motion.big_turn_speed * c.fallback_turn_efficiency)
 
     def step(self, brain, inputs):
@@ -269,7 +269,7 @@ class BigTurn(_Rotation):
         else:
             done = elapsed >= self.fallback
         if not done and elapsed >= brain.cfg.corner.big_turn_max_time:
-            brain.stats.turn_timeouts += 1   # unghiul nu a crescut: odometrie blocată sau semn greșit
+            brain.stats.turn_timeouts += 1   # the angle never grew: frozen odometry or a wrong sign
             done = True
         if done:
             return move(0.0, 0.0), "forward"
@@ -283,9 +283,9 @@ class Brain:
         self.consecutive_avoids = 0
         self.turn_sign = 1.0 if cfg.obstacle.default_turn == "left" else -1.0
         self.steer_sign = self.turn_sign
-        self.episode_open = False       # ocolirea curentă a fost deja numărată
-        self.clear_time = 0.0           # cât a mers fără obstacol, continuu
-        self.yaw: float | None = None   # odom.yaw desfășurat (fără salt la ±pi), + = stânga
+        self.episode_open = False       # the current avoidance has already been counted
+        self.clear_time = 0.0           # how long it has walked with a clear way, continuously
+        self.yaw: float | None = None   # unwrapped odom.yaw (no jump at ±pi), + = left
         self._raw_yaw: float | None = None
         self.heading_target: float | None = None
         self.heading_integral = 0.0
@@ -319,19 +319,19 @@ class Brain:
         self._raw_yaw = raw
 
     def look(self, inputs: Inputs, threshold: float | None = None) -> View:
-        """Vederea din față: pereții din rândurile de sus + obiectele joase și golurile
-        (văzute acum sau ținute minte), vezi ``hazards.py``."""
+        """The view ahead: walls from the upper rows plus low objects and drops (seen now or
+        remembered), see ``hazards.py``."""
         o = self.cfg.obstacle
         view = analyse(inputs.frame, o, threshold)
         return self.hazards.merge(view, o.stop_distance if threshold is None else threshold)
 
     @property
     def low_items(self) -> list[tuple[float, float]]:
-        """Obiectele joase de acum (înainte, stânga), văzute sau ținute minte."""
+        """Current low objects (forward, left), seen or remembered."""
         return [(h.forward, h.lateral) for h in self.hazards.items if h.kind == LOW]
 
     def pick_turn(self, view: View) -> float:
-        """+1 = stânga, -1 = dreapta: partea mai liberă; la egalitate, implicit."""
+        """+1 = left, -1 = right: the freer side; on a tie, the configured default."""
         side = view.freer_side
         if side is None:
             side = self.cfg.obstacle.default_turn
@@ -342,7 +342,7 @@ class Brain:
         self.state.enter(self, inputs)
 
     def tick(self, inputs: Inputs) -> Command:
-        # contabilitate de timp
+        # time accounting
         if self._last_now is not None:
             dt = max(0.0, inputs.now - self._last_now)
             n = self.state.name
@@ -357,7 +357,7 @@ class Brain:
             self._started = True
             self.state.enter(self, inputs)
 
-        # Gardianul: deasupra oricărei stări.
+        # The guard: above every state.
         if self.state.name != "hold":
             reason = None
             if not inputs.safe:

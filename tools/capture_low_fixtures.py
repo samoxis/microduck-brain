@@ -1,14 +1,14 @@
-"""Generează tests/fixtures/mujoco_low.json din senzorul ToF simulat REAL (microduck_rl, MuJoCo).
+"""Generate the test fixtures from the REAL simulated ToF sensor (microduck_rl, MuJoCo).
 
-Rulează cu venv-ul lui microduck_rl (nu face parte din testele obișnuite):
+Run it with microduck_rl's venv (it is not part of the regular test suite):
 
-    cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py
-    cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py --drop   # scara
+    cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py          # cubes, balls, tilt
+    cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py --drop   # the staircase
 
-Fiecare cadru vine cu poza pe care ar raporta-o robotul în robot.state: poziția și orientarea
-senzorului în trunchi (frames.tof, [w,x,y,z]), gravitația proiectată în trunchi și înălțimea trunchiului.
-Robotul stă în keyframe-ul STAND pe o podea plată; trunchiul poate fi înclinat (pitch/roll) ca să
-imite legănatul în mers. Un cub de 7 cm sau o minge de 8 cm e pusă la x metri în fața senzorului.
+Every frame comes with the pose the robot would report in robot.state: the sensor's position and
+orientation in the trunk (frames.tof, [w,x,y,z]), gravity projected into the trunk, and the trunk's
+height. The robot stands in the STAND keyframe on a flat floor; the trunk can be tilted (pitch/roll)
+to imitate the gait's sway. A 7 cm cube or an 8 cm ball is placed x metres ahead of the trunk.
 """
 
 from __future__ import annotations
@@ -47,16 +47,16 @@ def capture(shape, x, size, pitch_deg=0.0, roll_deg=0.0, lateral=0.0, seed=0):
     names = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_KEY, i) for i in range(m.nkey)]
     d = mujoco.MjData(m)
     d.qpos[:] = m.key_qpos[names.index("STAND")]
-    # înclinare trunchi: pitch + = nasul în jos (rotație în jurul lui +y)
+    # trunk tilt: pitch + = nose down (rotation about +y)
     p, r = np.radians(pitch_deg) / 2, np.radians(roll_deg) / 2
     qp, qr = [np.cos(p), 0, np.sin(p), 0], [np.cos(r), np.sin(r), 0, 0]
     d.qpos[3:7] = quat_mul(qr, qp)
     mujoco.mj_forward(m, d)
     site = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, "tof")
     trunk = m.body("trunk_base").id if "trunk_base" in [m.body(i).name for i in range(m.nbody)] else 1
-    Rt = d.xmat[trunk].reshape(3, 3)            # trunchi -> lume
-    Rs = d.site_xmat[site].reshape(3, 3)        # senzor -> lume
-    R_ts = Rt.T @ Rs                            # senzor -> trunchi
+    Rt = d.xmat[trunk].reshape(3, 3)            # trunk -> world
+    Rs = d.site_xmat[site].reshape(3, 3)        # sensor -> world
+    R_ts = Rt.T @ Rs                            # sensor -> trunk
     pos_t = Rt.T @ (d.site_xpos[site] - d.xpos[trunk])
     quat = np.zeros(4)
     mujoco.mju_mat2Quat(quat, R_ts.flatten())
@@ -73,7 +73,7 @@ def capture(shape, x, size, pitch_deg=0.0, roll_deg=0.0, lateral=0.0, seed=0):
 
 
 def capture_apartment(model, x, y, yaw_deg, label, seed=0, pitch_deg=0.0):
-    """Robotul în STAND în scena apartment, la (x, y) cu direcția yaw. Pentru golul scării."""
+    """The robot in STAND in the apartment scene, at (x, y) facing yaw. For the stairwell."""
     names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_KEY, i) for i in range(model.nkey)]
     d = mujoco.MjData(model)
     d.qpos[:] = model.key_qpos[names.index("STAND")]
@@ -98,30 +98,30 @@ def capture_apartment(model, x, y, yaw_deg, label, seed=0, pitch_deg=0.0):
 
 
 def main_drop():
-    """Gaura scării din apartment: x în [-0.40, 0.00], y în [-1.40, -0.70]; prima treaptă la -10 cm."""
+    """The apartment's stairwell: x in [-0.40, 0.00], y in [-1.40, -0.70]; the first step at -10 cm."""
     model = mujoco.MjModel.from_xml_path(str(D / "scene_apartment.xml"))
     out = []
-    # apropieri: d = distanța de la originea trunchiului la marginea găurii
+    # approaches: d = distance from the trunk origin to the edge of the hole
     for dd in (1.4, 1.2, 1.0, 0.85, 0.75, 0.6, 0.45, 0.3, 0.2):
         for pitch in (0.0, 3.0, -3.0):
-            out.append(capture_apartment(model, -0.2, -0.7 + dd, -90, f"nord d={dd}", pitch_deg=pitch))
+            out.append(capture_apartment(model, -0.2, -0.7 + dd, -90, f"north d={dd}", pitch_deg=pitch))
     for dd in (0.6, 0.5, 0.4, 0.3, 0.2):
-        out.append(capture_apartment(model, -0.4 - dd, -1.05, 0, f"vest d={dd}"))
+        out.append(capture_apartment(model, -0.4 - dd, -1.05, 0, f"west d={dd}"))
     for dd in (0.35, 0.3, 0.2):
-        out.append(capture_apartment(model, 0.0 + dd, -1.05, 180, f"est d={dd}"))
-    # din sud: aici treapta de jos e la 40 cm sub podea, iar razele lovesc treptele (distanță mai lungă)
+        out.append(capture_apartment(model, 0.0 + dd, -1.05, 180, f"east d={dd}"))
+    # from the south: the bottom step is 40 cm below the floor and the beams hit the steps (longer ranges)
     for dd in (1.2, 0.9, 0.6, 0.4, 0.2):
-        out.append(capture_apartment(model, -0.2, -1.4 - dd, 90, f"sud d={dd}"))
-    # trecere pe lângă gaură, spre sud, la 20 cm la est de margine
+        out.append(capture_apartment(model, -0.2, -1.4 - dd, 90, f"south d={dd}"))
+    # walking past the hole, heading south, 20 cm east of its edge
     for y in (0.0, -0.3, -0.6, -0.9, -1.2):
-        out.append(capture_apartment(model, 0.2, y, -90, f"pe langa x=0.2 y={y}"))
-    # podea obișnuită din apartament (camere, covoare, mobilă, pereți): nu trebuie să dea gol
+        out.append(capture_apartment(model, 0.2, y, -90, f"alongside x=0.2 y={y}"))
+    # ordinary floor in the apartment (rooms, rugs, furniture, walls): must never read as a drop
     for (x, y) in ((-2.5, -1.0), (-2.5, 1.8), (2.2, 1.5), (2.2, 0.0), (2.2, -2.0), (-0.2, 1.5), (-1.5, -2.0), (-0.6, 2.2)):
         for yaw in (0, 90, 180, 270):
             for seed in (0, 1):
-                out.append(capture_apartment(model, x, y, yaw, f"camera ({x},{y}) yaw={yaw}", seed=seed))
+                out.append(capture_apartment(model, x, y, yaw, f"room ({x},{y}) yaw={yaw}", seed=seed))
     OUT_DROP.write_text(json.dumps(out, separators=(",", ":")))
-    print(f"{len(out)} cadre -> {OUT_DROP} ({OUT_DROP.stat().st_size // 1024} KiB)")
+    print(f"{len(out)} frames -> {OUT_DROP} ({OUT_DROP.stat().st_size // 1024} KiB)")
 
 
 def main():
@@ -139,7 +139,7 @@ def main():
                     out.append(capture(shape, x, size, pitch_deg=pitch, lateral=lateral, seed=1))
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(json.dumps(out, separators=(",", ":")))
-    print(f"{len(out)} cadre -> {OUT} ({OUT.stat().st_size // 1024} KiB)")
+    print(f"{len(out)} frames -> {OUT} ({OUT.stat().st_size // 1024} KiB)")
 
 
 if __name__ == "__main__":

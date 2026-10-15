@@ -1,4 +1,4 @@
-"""Configurația creierului, încărcată din TOML. Chei necunoscute sunt respinse."""
+"""Brain configuration, loaded from TOML. Unknown keys are rejected, not silently ignored."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ class Obstacle:
 
 @dataclass
 class Low:
-    """Obiecte joase (cuburi, mingi) văzute în rândurile de jos, unde se vede și podeaua."""
+    """Low objects (cubes, balls) seen in the bottom rows, where the floor is also visible."""
 
     nominal_height: float = 0.246
     nominal_pitch_deg: float = 0.0
@@ -62,7 +62,7 @@ class Low:
 
 @dataclass
 class Drop:
-    """Goluri: margini, scări în jos."""
+    """Drops: ledges, stairs going down."""
 
     max_expected: float = 1.2
     range_margin: float = 0.10
@@ -120,66 +120,66 @@ class Config:
     def validate(self) -> None:
         o = self.obstacle
         if not 0 <= o.first_row <= o.last_row <= 7:
-            raise ValueError("obstacle: first_row/last_row trebuie să fie 0 <= first <= last <= 7")
+            raise ValueError("obstacle: first_row/last_row must satisfy 0 <= first <= last <= 7")
         if not 0 <= o.front_first_col <= o.front_last_col <= 7:
-            raise ValueError("obstacle: front_first_col/front_last_col trebuie să fie în 0..7")
+            raise ValueError("obstacle: front_first_col/front_last_col must be within 0..7")
         if o.clear_distance < o.stop_distance:
-            raise ValueError("obstacle: clear_distance trebuie să fie >= stop_distance")
+            raise ValueError("obstacle: clear_distance must be >= stop_distance")
         if o.slow_distance < o.stop_distance:
-            raise ValueError("obstacle: slow_distance trebuie să fie >= stop_distance")
+            raise ValueError("obstacle: slow_distance must be >= stop_distance")
         if o.steer_yaw_max < 0 or o.steer_slew <= 0 or o.min_turn_degrees < 0:
             raise ValueError("obstacle: steer_yaw_max >= 0, steer_slew > 0, min_turn_degrees >= 0")
         if o.low_obstacles not in ("avoid", "ignore"):
-            raise ValueError("obstacle: low_obstacles trebuie să fie 'avoid' sau 'ignore'")
+            raise ValueError("obstacle: low_obstacles must be 'avoid' or 'ignore'")
         if o.drops not in ("avoid", "ignore"):
-            raise ValueError("obstacle: drops trebuie să fie 'avoid' sau 'ignore'")
+            raise ValueError("obstacle: drops must be 'avoid' or 'ignore'")
         dr = self.drop
         if dr.max_expected <= 0 or not 0 <= dr.range_margin < 1 or dr.min_zones < 1 or dr.confirm_time < 0:
-            raise ValueError("drop: max_expected > 0, range_margin în [0, 1), min_zones >= 1, confirm_time >= 0")
+            raise ValueError("drop: max_expected > 0, range_margin in [0, 1), min_zones >= 1, confirm_time >= 0")
         if dr.clearance < 0 or dr.corridor_half_width <= 0 or dr.memory_seconds < 0:
             raise ValueError("drop: clearance >= 0, corridor_half_width > 0, memory_seconds >= 0")
         lo = self.low
         if lo.nominal_height <= 0 or lo.tilt_tolerance_deg < 0 or lo.tilt_tolerance_nopose_deg < lo.tilt_tolerance_deg:
-            raise ValueError("low: nominal_height > 0 și 0 <= tilt_tolerance_deg <= tilt_tolerance_nopose_deg")
+            raise ValueError("low: nominal_height > 0 and 0 <= tilt_tolerance_deg <= tilt_tolerance_nopose_deg")
         if not 0 <= lo.range_margin < 0.5 or lo.confirm_time < 0 or lo.corridor_half_width <= 0 or lo.memory_seconds < 0:
-            raise ValueError("low: range_margin în [0, 0.5), confirm_time >= 0, corridor_half_width > 0, memory_seconds >= 0")
+            raise ValueError("low: range_margin in [0, 0.5), confirm_time >= 0, corridor_half_width > 0, memory_seconds >= 0")
         if not 0 < self.corner.fallback_turn_efficiency <= 1 or self.corner.big_turn_max_time <= 0:
-            raise ValueError("corner: fallback_turn_efficiency în (0, 1], big_turn_max_time > 0")
+            raise ValueError("corner: fallback_turn_efficiency in (0, 1], big_turn_max_time > 0")
         if self.heading.yaw_sign not in (1, -1, 1.0, -1.0):
-            raise ValueError("heading: yaw_sign trebuie să fie 1 sau -1")
+            raise ValueError("heading: yaw_sign must be 1 or -1")
         if self.heading.kp < 0 or self.heading.ki < 0 or self.heading.max_correction < 0:
-            raise ValueError("heading: kp, ki, max_correction trebuie să fie >= 0")
+            raise ValueError("heading: kp, ki, max_correction must be >= 0")
         if o.default_turn not in ("left", "right"):
-            raise ValueError("obstacle: default_turn trebuie să fie 'left' sau 'right'")
+            raise ValueError("obstacle: default_turn must be 'left' or 'right'")
         if self.motion.forward_speed < 0 or self.motion.turn_speed <= 0 or self.motion.big_turn_speed <= 0:
-            raise ValueError("motion: vitezele trebuie să fie pozitive")
+            raise ValueError("motion: speeds must be positive")
         if self.loop.rate_hz <= 0:
-            raise ValueError("loop: rate_hz trebuie să fie > 0")
+            raise ValueError("loop: rate_hz must be > 0")
         if self.corner.turns_before_big_turn < 1:
-            raise ValueError("corner: turns_before_big_turn trebuie să fie >= 1")
+            raise ValueError("corner: turns_before_big_turn must be >= 1")
 
 
-# Pragurile minime măsurate în simulare (2026-10-03, simularea completă, cu politicile de mers):
-# sub ele politica NU pășește deloc și robotul stă pe loc.
-MIN_FORWARD_SPEED = 0.20   # m/s cerut
-MIN_TURN_SPEED = 1.1       # rad/s cerut, la rotire în loc
+# Minimum commanded speeds, measured in the full simulator with the official walking policies
+# (2026-10-03): below them the policy does not step at all and the robot stands still.
+MIN_FORWARD_SPEED = 0.20   # m/s, commanded
+MIN_TURN_SPEED = 1.1       # rad/s, commanded, turning in place
 
 
 def speed_warnings(cfg: "Config") -> list[str]:
-    """Avertismente pentru vitezele din configurație care sunt sub pragul la care robotul pășește."""
+    """Warnings for configured speeds that are below the threshold at which the robot steps."""
     out = []
     m = cfg.motion
     if m.forward_speed < MIN_FORWARD_SPEED:
         out.append(
-            f"motion.forward_speed = {m.forward_speed} m/s e sub pragul de mers ({MIN_FORWARD_SPEED}): "
-            "robotul NU va păși, va sta pe loc"
+            f"motion.forward_speed = {m.forward_speed} m/s is below the walking threshold ({MIN_FORWARD_SPEED}): "
+            "the robot will NOT step, it will stand still"
         )
     for key in ("turn_speed", "big_turn_speed"):
         v = getattr(m, key)
         if v < MIN_TURN_SPEED:
             out.append(
-                f"motion.{key} = {v} rad/s e sub pragul de rotire ({MIN_TURN_SPEED}): "
-                "robotul NU va păși la rotire, va sta pe loc"
+                f"motion.{key} = {v} rad/s is below the turning threshold ({MIN_TURN_SPEED}): "
+                "the robot will NOT step while turning, it will stand still"
             )
     return out
 
@@ -188,11 +188,11 @@ def _fill(obj, data: dict, path: str) -> None:
     known = {f.name: f for f in fields(obj)}
     for key, value in data.items():
         if key not in known:
-            raise ValueError(f"cheie necunoscută în configurație: {path}{key}")
+            raise ValueError(f"unknown configuration key: {path}{key}")
         current = getattr(obj, key)
         if is_dataclass(current):
             if not isinstance(value, dict):
-                raise ValueError(f"{path}{key} trebuie să fie o secțiune")
+                raise ValueError(f"{path}{key} must be a section")
             _fill(current, value, f"{path}{key}.")
         else:
             if isinstance(current, bool):
@@ -203,7 +203,7 @@ def _fill(obj, data: dict, path: str) -> None:
             else:
                 ok = isinstance(value, type(current)) and not isinstance(value, bool)
             if not ok:
-                raise ValueError(f"{path}{key}: se aștepta {type(current).__name__}, am primit {value!r}")
+                raise ValueError(f"{path}{key}: expected {type(current).__name__}, got {value!r}")
             setattr(obj, key, value)
 
 

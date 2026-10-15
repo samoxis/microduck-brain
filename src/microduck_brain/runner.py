@@ -1,4 +1,4 @@
-"""Legătura dintre creier și robot: citește senzorii, rulează ``Brain.tick``, trimite comenzi."""
+"""The link between the brain and the robot: read the sensors, run ``Brain.tick``, send commands."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ log = logging.getLogger("microduck_brain")
 
 
 def default_sockets(cfg: Config) -> tuple[str, str]:
-    """Căile socket-urilor: din configurație, altfel simularea dacă există, altfel robotul real."""
+    """Socket paths: from the config, else the simulator's if present, else the real robot's."""
     robot, tof = cfg.sockets.robot, cfg.sockets.tof
     sim = Path(os.environ.get("DUCK_SIM_STATE", Path.home() / ".cache" / "duck-sim"))
     duck = os.environ.get("DUCK_SIM_DUCK", "duck-a")
@@ -30,10 +30,12 @@ def default_sockets(cfg: Config) -> tuple[str, str]:
 
 
 class Runner:
-    def __init__(self, cfg: Config, robot_sock: str, tof_sock: str, clock=time.monotonic) -> None:
+    def __init__(self, cfg: Config, robot_sock: str, tof_sock: str, clock=time.monotonic,
+                 recorder=None) -> None:
         self.cfg = cfg
         self.brain = Brain(cfg)
         self.clock = clock
+        self.recorder = recorder          # optional: record.Recorder, one line per tick
         self.stop_event = threading.Event()
         self.link = Link(robot_sock)
         self._lock = threading.Lock()
@@ -44,15 +46,15 @@ class Runner:
         self._state_at = -1e9
         self._yaw: float | None = None
         self._pos: tuple[float, float] | None = None
-        self._poses: deque[tuple[int, Pose | None]] = deque(maxlen=64)   # (t_ns, poză) din robot.state
+        self._poses: deque[tuple[int, Pose | None]] = deque(maxlen=64)   # (t_ns, pose) from robot.state
         self._frame_t_ns = 0
         self._healthy = False
-        self._health_reason = "încă nu am întrebat"
+        self._health_reason = "not asked yet"
         self._health_at = -1e9
         self.tof = Stream(tof_sock, "tof.stream", None, self._on_tof, self.stop_event)
         self.state = Stream(robot_sock, "robot.subscribe", {"hz": 25}, self._on_state, self.stop_event)
 
-    # --- fluxuri ---------------------------------------------------------
+    # --- streams ---------------------------------------------------------------
     def _on_tof(self, method: str, params: dict) -> None:
         if method != "tof.frame":
             return
@@ -81,8 +83,9 @@ class Runner:
             self._state_at = self.clock()
 
     def _pose_for_frame(self) -> Pose | None:
-        """Poza din starea cea mai apropiată în timp de cadrul de adâncime (ceas comun, t_ns); fără
-        t_ns, ultima poză. Mai departe de 100 ms nu e de încredere: mai bine fără poză (toleranță mare)."""
+        """The pose from the state sample closest in time to the depth frame (shared clock, t_ns);
+        without t_ns, the latest pose. More than 100 ms apart is not trusted: better no pose (and
+        the wider tolerance) than a wrong one."""
         if not self._poses:
             return None
         if self._frame_t_ns > 0:
@@ -92,7 +95,7 @@ class Runner:
             return None
         return self._poses[-1][1]
 
-    # --- intrări ---------------------------------------------------------
+    # --- inputs ----------------------------------------------------------------
     def _poll_health(self, now: float) -> None:
         if now - self._health_at < self.cfg.safety.health_poll:
             return
@@ -102,10 +105,10 @@ class Runner:
                 self.link.connect()
             res = self.link.call("robot.health")
             self._healthy = bool(res.get("healthy", False))
-            self._health_reason = "" if self._healthy else str(res.get("reason") or "nesănătos")
+            self._health_reason = "" if self._healthy else str(res.get("reason") or "unhealthy")
         except (OSError, RpcError) as e:
             self._healthy = False
-            self._health_reason = f"robot.health indisponibil ({e})"
+            self._health_reason = f"robot.health unavailable ({e})"
 
     def inputs(self, now: float) -> Inputs:
         self._poll_health(now)
@@ -120,16 +123,16 @@ class Runner:
             pose = self._pose_for_frame() if fresh else None
         reason = ""
         if state_age > s.state_timeout:
-            reason = "fără robot.state"
+            reason = "no robot.state"
         elif fallen:
-            reason = "robotul a căzut"
+            reason = "the robot has fallen"
         elif limp:
-            reason = "robotul e limp"
+            reason = "the robot is limp"
         elif not self._healthy:
             reason = self._health_reason
         return Inputs(now=now, frame=frame, safe=not reason, safe_reason=reason, yaw=yaw, pose=pose, pos=pos)
 
-    # --- ieșire ----------------------------------------------------------
+    # --- output ----------------------------------------------------------------
     def _send(self, cmd) -> None:
         if cmd.kind == "none":
             return
@@ -141,10 +144,10 @@ class Runner:
             else:
                 self.link.call("robot.stop")
         except (OSError, RpcError) as e:
-            log.warning("nu am putut trimite %s: %s", cmd.kind, e)
+            log.warning("could not send %s: %s", cmd.kind, e)
 
     def send_stop(self) -> None:
-        """Oprire sigură la ieșire: zero viteză + robot.stop, cu o reconectare dacă trebuie."""
+        """Safe stop on exit: zero velocity + robot.stop, reconnecting once if needed."""
         for _ in range(2):
             try:
                 if not self.link.connected:
@@ -155,7 +158,7 @@ class Runner:
             except (OSError, RpcError):
                 self.link.close()
 
-    # --- bucla -----------------------------------------------------------
+    # --- loop ------------------------------------------------------------------
     def run(self) -> None:
         self.tof.start()
         self.state.start()
@@ -169,19 +172,24 @@ class Runner:
                 cmd = self.brain.tick(inp)
                 self._send(cmd)
                 name = self.brain.state_name
+                if self.recorder is not None:
+                    self.recorder.write(inp, cmd, name)
                 if name != last_name:
                     extra = f" ({self.brain.last_hold_reason})" if name == "hold" and self.brain.last_hold_reason else ""
-                    log.info("stare: %s%s", name, extra)
+                    log.info("state: %s%s", name, extra)
                     last_name = name
                 if self.cfg.loop.log_every and t0 - last_log >= self.cfg.loop.log_every:
                     last_log = t0
                     st = self.brain.stats
                     log.info(
-                        "stare=%s ocoliri=%d (frâne=%d) obiecte_joase=%d întoarceri_mari=%d opriri_siguranță=%d mers=%.0fs",
-                        name, st.avoids, st.brakes, st.low_seen, st.big_turns, st.holds_unsafe, st.forward_seconds,
+                        "state=%s avoids=%d (stops=%d) low_objects=%d drops=%d big_turns=%d safety_holds=%d walked=%.0fs",
+                        name, st.avoids, st.brakes, st.low_seen, st.drops_seen, st.big_turns,
+                        st.holds_unsafe, st.forward_seconds,
                     )
                 self.stop_event.wait(max(0.0, period - (self.clock() - t0)))
         finally:
             self.send_stop()
             self.stop_event.set()
             self.link.close()
+            if self.recorder is not None:
+                self.recorder.close()

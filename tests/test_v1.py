@@ -1,7 +1,7 @@
-"""Teste v1: viraj din mers, întoarceri după unghiul măsurat, menținerea direcției, praguri de viteză.
+"""v1 tests: steering while walking, turns by measured angle, heading hold, speed thresholds.
 
-``PlantSim`` e un robot simplu: rotirea reală = ``eff`` x cea cerută (+ ``bias`` rad/s cât merge
-înainte), și raportează yaw-ul ca ``odom.yaw`` (cu salt la ±pi, ca un unghi real).
+``PlantSim`` is a simple robot: real turn rate = ``eff`` x the commanded one (+ ``bias`` rad/s while
+walking forward), and it reports its yaw as ``odom.yaw`` (wrapping at ±pi, like a real angle).
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ class PlantSim:
         self.cfg = cfg or Config()
         self.brain = Brain(self.cfg)
         self.t = 0.0
-        self.true_yaw = yaw0           # nedesfășurat
+        self.true_yaw = yaw0           # not wrapped
         self.eff, self.bias, self.report_yaw = eff, bias, report_yaw
         self.frame = clear()
         self.safe = True
@@ -43,7 +43,7 @@ class PlantSim:
         cmd = None
         while self.t < end - 1e-9:
             yaw = wrap(self.true_yaw) if self.report_yaw else None
-            cmd = self.brain.tick(Inputs(self.t, self.frame, self.safe, "" if self.safe else "căzut", yaw))
+            cmd = self.brain.tick(Inputs(self.t, self.frame, self.safe, "" if self.safe else "fallen", yaw))
             self.log.append((self.t, self.brain.state_name, cmd, self.true_yaw))
             if cmd.kind == "move":
                 self.true_yaw += (self.eff * cmd.vyaw + (self.bias if cmd.vx > 0 else 0.0)) * dt
@@ -56,7 +56,7 @@ class PlantSim:
 
 
 def obstacle_at(d, side):
-    """Obstacol la distanța d, pe jumătatea 'left' sau 'right' a cadrului (restul liber)."""
+    """Obstacle at distance d, on the 'left' or 'right' half of the frame (the rest clear)."""
     cols = range(0, 4) if side == "left" else range(4, 8)
     return frame(lambda r, c: d if (c in cols and r <= 4) else FAR)
 
@@ -66,9 +66,9 @@ def test_obstacle_approaching_makes_it_steer_while_still_walking():
     s = PlantSim()
     s.up()
     cmd = s.run(1.0, obstacle_at(0.5, "left"))
-    assert s.brain.state_name == "forward"       # nu frânează
-    assert cmd.vx == pytest.approx(s.cfg.motion.forward_speed)   # continuă să meargă
-    assert cmd.vyaw < 0                            # spre dreapta (partea liberă)
+    assert s.brain.state_name == "forward"       # does not stop
+    assert cmd.vx == pytest.approx(s.cfg.motion.forward_speed)   # keeps walking
+    assert cmd.vyaw < 0                            # to the right (the free side)
     assert s.brain.stats.brakes == 0 and s.brain.stats.avoids == 1
 
 
@@ -85,7 +85,7 @@ def test_steering_grows_as_the_obstacle_gets_closer():
 
 def test_steers_toward_the_free_side_both_ways():
     s = PlantSim(); s.up()
-    assert s.run(2.0, obstacle_at(0.4, "right")).vyaw > 0   # obstacol dreapta -> stânga
+    assert s.run(2.0, obstacle_at(0.4, "right")).vyaw > 0   # obstacle on the right -> left
     s = PlantSim(); s.up()
     assert s.run(2.0, obstacle_at(0.4, "left")).vyaw < 0
 
@@ -99,7 +99,7 @@ def test_steering_is_smooth_no_jump_in_yaw_command():
     yaws = [c.vyaw for _, _, c, _ in s.log if c.kind == "move"]
     steps = [abs(b - a) for a, b in zip(yaws, yaws[1:])]
     assert max(steps) <= s.cfg.obstacle.steer_slew * 0.05 + 1e-9
-    # și nu a oprit mersul niciodată
+    # and never stopped walking
     assert all(c.vx > 0 for _, _, c, _ in s.log if c.kind == "move")
 
 
@@ -129,16 +129,16 @@ def test_turn_then_continue_is_one_avoid_not_two():
     s = PlantSim()
     s.up()
     s.run(0.3, wall_ahead(0.2))
-    s.run(2.0)                                  # frână + rotire
+    s.run(2.0)                                  # stop + turn
     s.run(0.3, frame(lambda r, c: 0.5))         # liber peste clear_distance dar sub slow_distance
     assert s.brain.state_name == "forward"
     s.run(0.5)
     assert s.brain.stats.avoids == 1
 
 
-# --- 2. întoarceri după unghiul măsurat ---------------------------------------
+# --- 2. turns by measured angle ---------------------------------------------------
 def enter_bigturn(s):
-    """Duce robotul în bigturn și întoarce (yaw real, timp) exact la intrare; apoi drumul e liber."""
+    """Drive the robot into bigturn and return (true yaw, time) at entry; afterwards the way is clear."""
     s.cfg.corner.turns_before_big_turn = 1
     s.up()
     s.frame = wall_ahead(0.2)
@@ -146,9 +146,9 @@ def enter_bigturn(s):
         y, t = s.true_yaw, s.t
         s.run(0.05)
         if s.brain.state_name == "bigturn":
-            s.frame = clear()      # după întoarcere drumul e liber, ca să nu reintre în frână
+            s.frame = clear()      # after the turn the way is clear, so it doesn't stop again
             return y, t
-    raise AssertionError("n-a ajuns în bigturn")
+    raise AssertionError("never reached bigturn")
 
 
 def finish_bigturn(s, limit=40.0):
@@ -165,7 +165,7 @@ def test_big_turn_reaches_the_measured_angle_whatever_the_real_rate(eff):
     turned = abs(s.true_yaw - y0)
     target = math.radians(s.cfg.corner.big_turn_degrees)
     assert target <= turned <= target + 0.25, f"rotit {math.degrees(turned):.0f}°"
-    # cu eficiență mică durează proporțional mai mult
+    # with low efficiency it takes proportionally longer
     expected = target / (s.cfg.motion.big_turn_speed * eff)
     assert s.t - t0 == pytest.approx(expected, abs=0.4)
 
@@ -178,7 +178,7 @@ def test_big_turn_works_across_the_pi_wraparound():
 
 
 def test_big_turn_gives_up_if_the_angle_never_grows():
-    s = PlantSim(eff=0.0)                        # odometrie înghețată
+    s = PlantSim(eff=0.0)                        # frozen odometry
     _, t0 = enter_bigturn(s)
     finish_bigturn(s)
     assert s.brain.stats.turn_timeouts == 1
@@ -204,11 +204,11 @@ def test_big_turn_degrees_comes_from_config():
 
 
 def test_turn_does_not_end_before_min_measured_angle_even_if_clear():
-    s = PlantSim(eff=0.2)                        # se rotește foarte puțin pe secundă
+    s = PlantSim(eff=0.2)                        # turns very little per second
     s.up()
     s.run(0.5, wall_ahead(0.2))
     assert s.brain.state_name in ("brake", "turn")
-    s.run(0.5, clear())                          # liber, dar încă n-a rotit 20°
+    s.run(0.5, clear())                          # clear, but has not turned 20° yet
     assert s.brain.state_name == "turn"
     s.run(10.0)
     assert s.brain.state_name == "forward"
@@ -223,7 +223,7 @@ def test_yaw_sign_minus_one_measures_a_robot_whose_odom_grows_to_the_right():
         nonlocal reported, t
         cmd = brain.tick(Inputs(t, fr, True, "", reported))
         if cmd.kind == "move":
-            reported -= 0.5 * cmd.vyaw * 0.05      # vyaw>0 (stânga) => odom.yaw SCADE
+            reported -= 0.5 * cmd.vyaw * 0.05      # vyaw>0 (left) => odom.yaw DECREASES
         t += 0.05
     for _ in range(50):
         tick(clear())
@@ -236,7 +236,7 @@ def test_yaw_sign_minus_one_measures_a_robot_whose_odom_grows_to_the_right():
     assert abs(reported - start) == pytest.approx(math.radians(160), abs=0.25)
 
 
-# --- 4. menținerea direcției ----------------------------------------------------
+# --- 4. heading hold -----------------------------------------------------------------
 def drift_error(enabled, bias=0.10, eff=0.5, seconds=40.0):
     cfg = from_dict({"heading": {"enabled": enabled}})
     s = PlantSim(cfg, eff=eff, bias=bias)
@@ -249,8 +249,8 @@ def drift_error(enabled, bias=0.10, eff=0.5, seconds=40.0):
 def test_heading_hold_cancels_constant_drift():
     off = drift_error(False)
     on = drift_error(True)
-    assert off > 3.0                 # fără corecție deviază mult (0.1 rad/s x 40 s)
-    assert on < 0.12                 # cu corecție rămâne în ~7°
+    assert off > 3.0                 # without correction it drifts a lot (0.1 rad/s x 40 s)
+    assert on < 0.12                 # with correction it stays within ~7°
 
 
 def test_heading_hold_converges_for_other_rates_and_signs():
@@ -261,7 +261,7 @@ def test_heading_hold_converges_for_other_rates_and_signs():
 
 def test_heading_correction_is_bounded():
     cfg = from_dict({"heading": {"max_correction": 0.2}})
-    s = PlantSim(cfg, eff=0.5, bias=0.3)       # deriva e mai mare decât poate corecta
+    s = PlantSim(cfg, eff=0.5, bias=0.3)       # the drift is larger than it can correct
     s.up()
     s.log.clear()
     s.run(15.0, clear())
@@ -283,10 +283,10 @@ def test_new_heading_is_adopted_after_an_avoidance():
     start = s.true_yaw
     s.run(4.0, obstacle_at(0.35, "left"))      # a virat spre dreapta
     s.run(15.0, clear())
-    assert s.true_yaw < start - 0.1             # nu s-a întors la direcția veche
+    assert s.true_yaw < start - 0.1             # did not go back to the old heading
     after = s.true_yaw
     s.run(10.0)
-    assert abs(s.true_yaw - after) < 0.1        # și o ține pe cea nouă
+    assert abs(s.true_yaw - after) < 0.1        # and holds the new one
 
 
 def test_heading_hold_off_without_odometry():
@@ -305,7 +305,7 @@ def test_heading_integral_is_reset_after_a_fall():
     assert s.brain.heading_integral == 0.0
 
 
-# --- 3. praguri de viteză --------------------------------------------------------
+# --- 3. speed thresholds ---------------------------------------------------------------
 def test_default_speeds_are_above_the_walking_thresholds():
     assert config_mod.speed_warnings(Config()) == []
 
@@ -317,7 +317,7 @@ def test_default_speeds_are_above_the_walking_thresholds():
 def test_speeds_below_threshold_warn_naming_the_key(section, key, value):
     cfg = from_dict({section: {key: value}})
     w = config_mod.speed_warnings(cfg)
-    assert len(w) == 1 and f"{section}.{key}" in w[0] and "NU va păși" in w[0]
+    assert len(w) == 1 and f"{section}.{key}" in w[0] and "will NOT step" in w[0]
 
 
 def test_speeds_exactly_at_threshold_do_not_warn():
@@ -333,7 +333,7 @@ def test_startup_logs_a_clear_warning(caplog):
         out = log_config_warnings(cfg)
     assert len(out) == 2
     text = caplog.text
-    assert "ATENȚIE" in text and "forward_speed" in text and "turn_speed" in text
+    assert "WARNING" in text and "forward_speed" in text and "turn_speed" in text
     assert "brain.toml" in text
 
 

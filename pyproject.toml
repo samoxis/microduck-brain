@@ -1,13 +1,15 @@
 [project]
 name = "microduck-brain"
-version = "0.1.0"
-description = "Creier autonom (v0) pentru Microduck: client al robotului prin JSON-RPC."
+version = "0.3.0"
+description = "Autonomous behaviour layer for the Microduck biped: obstacle, low-object and drop avoidance over the robot's public JSON-RPC API."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []  # doar biblioteca standard, intenționat
+dependencies = []  # standard library only, on purpose
 
 [project.scripts]
 microduck-brain = "microduck_brain.cli:main"
+microduck-brain-replay = "microduck_brain.cli:replay_main"
+microduck-brain-plot = "microduck_brain.cli:plot_main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

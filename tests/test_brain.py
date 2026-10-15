@@ -1,6 +1,6 @@
-"""Teste pentru logica de decizie, cu cadre de adâncime sintetice.
+"""Tests for the decision logic, with synthetic depth frames.
 
-Convenții: rândul 0 sus, coloana 0 = stânga robotului (ca în simulator și în ``tofd``).
+Conventions: row 0 at the top, column 0 = the robot's left (as in the simulator and ``tofd``).
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ _FLOOR = floor_model(None, Config().low)
 
 
 def frame(fn=None, fill=FAR) -> DepthFrame:
-    """Cadru 8x8; ``fn(row, col)`` întoarce metri, ``None`` = măsurătoare eșuată,
-    ``"free"`` = nimic în rază. „Departe" (FAR) în rândurile de jos înseamnă podeaua: un robot în
-    picioare vede mereu podeaua acolo (rândurile 5-7: 1.68 / 1.01 / 0.73 m)."""
+    """8x8 frame; ``fn(row, col)`` returns metres, ``None`` = failed measurement,
+    ``"free"`` = nothing in range. "Far" (FAR) in the bottom rows means the floor: a standing robot
+    always sees the floor there (rows 5-7: 1.68 / 1.01 / 0.73 m)."""
     dist, status = [], []
     for r in range(8):
         for c in range(8):
@@ -48,7 +48,7 @@ def wall_ahead(d=0.20):
 
 
 def obstacle_left(d=0.20):
-    # obstacol pe coloanele 0-3 (stânga); dreapta liberă
+    # obstacle on columns 0-3 (left); right side clear
     return frame(lambda r, c: d if c <= 3 else FAR)
 
 
@@ -57,12 +57,12 @@ def obstacle_right(d=0.20):
 
 
 def corner():
-    # perete în față, ambele părți la fel de apropiate
+    # wall ahead, both sides equally close
     return frame(lambda r, c: 0.20)
 
 
 class Sim:
-    """Rulează Brain-ul cu un ceas fals, 20 Hz."""
+    """Runs the Brain on a fake clock, 20 Hz."""
 
     def __init__(self, cfg: Config | None = None, safe=True):
         self.cfg = cfg or Config()
@@ -80,13 +80,13 @@ class Sim:
         out = None
         end = self.t + seconds
         while self.t < end - 1e-9:
-            out = self.brain.tick(Inputs(self.t, self.frame, self.safe, "" if self.safe else "căzut"))
+            out = self.brain.tick(Inputs(self.t, self.frame, self.safe, "" if self.safe else "fallen"))
             self.log.append((self.t, self.brain.state_name, out))
             self.t += dt
         return out
 
     def up(self):
-        """Pornește și așteaptă să iasă din hold."""
+        """Start and wait until it leaves hold."""
         self.run(self.cfg.safety.resume_delay + 0.3)
         assert self.brain.state_name == "forward"
 
@@ -159,8 +159,8 @@ def test_wall_stops_then_turns_then_continues():
     s.run(0.1, wall_ahead())
     assert s.brain.state_name in ("brake", "turn")
     cmd = s.run(0.1)
-    assert cmd.kind == "move" and cmd.vx == 0.0  # stă pe loc, nu merge
-    s.run(1.0)  # frâna trece, începe întoarcerea
+    assert cmd.kind == "move" and cmd.vx == 0.0  # standing still, not walking
+    s.run(1.0)  # the stop pause ends, the turn starts
     assert s.brain.state_name == "turn"
     cmd = s.run(0.1)
     assert cmd.vx == 0.0 and abs(cmd.vyaw) == pytest.approx(s.cfg.motion.turn_speed)
@@ -192,7 +192,7 @@ def test_obstacle_on_right_turns_left():
     s.up()
     s.run(2.0, obstacle_right())
     assert s.brain.state_name == "turn"
-    assert s.run(0.1).vyaw > 0  # vyaw pozitiv = stânga
+    assert s.run(0.1).vyaw > 0  # positive vyaw = left
 
 
 def test_symmetric_wall_uses_default_turn():
@@ -208,7 +208,7 @@ def test_turn_waits_for_clear_distance_not_just_stop_distance():
     s.up()
     s.run(2.0, wall_ahead(0.2))
     assert s.brain.state_name == "turn"
-    # 0.33 m: peste stop_distance (0.28) dar sub clear_distance (0.40) => continuă să se întoarcă
+    # 0.33 m: above stop_distance (0.28) but below clear_distance (0.40) => keeps turning
     s.run(1.0, frame(lambda r, c: 0.33))
     assert s.brain.state_name == "turn"
     s.run(0.5, clear())
@@ -218,12 +218,12 @@ def test_turn_waits_for_clear_distance_not_just_stop_distance():
 def test_corner_triggers_big_turn_after_repeated_avoids():
     s = Sim()
     s.up()
-    # perete mereu în față: nu înaintează niciodată între ocoliri
-    # (după fiecare întoarcere vede liber o clipă, apoi iar perete)
+    # always a wall ahead: never makes progress between avoidances
+    # (after each turn it sees clear for a moment, then a wall again)
     for _ in range(s.cfg.corner.turns_before_big_turn):
-        s.run(0.2, wall_ahead())            # blocat => frână
-        s.run(1.0)                          # frână + început de întoarcere
-        s.run(0.7, clear())                 # întoarcerea găsește liber, reia mersul scurt
+        s.run(0.2, wall_ahead())            # blocked => stop
+        s.run(1.0)                          # stop + start of the turn
+        s.run(0.7, clear())                 # the turn finds a clear way, walks briefly
         s.run(0.1, wall_ahead())            # dar iar perete imediat
         if s.brain.state_name == "bigturn":
             break
@@ -235,18 +235,18 @@ def test_corner_triggers_big_turn_after_repeated_avoids():
     s.run(expected + 0.3, wall_ahead())
     assert s.brain.state_name != "bigturn"
     assert s.t - t0 > expected
-    # cât a durat, nu a mers înainte
+    # while it lasted, it never walked forward
     assert all(c.vx == 0.0 for _, n, c in s.log if n == "bigturn" and c.kind == "move")
 
 
 def test_progress_resets_the_corner_counter():
     s = Sim()
     s.up()
-    for _ in range(5):  # mult mai multe decât turns_before_big_turn
+    for _ in range(5):  # many more than turns_before_big_turn
         s.run(0.2, wall_ahead())
         s.run(1.0)
         s.run(0.6, clear())
-        s.run(s.cfg.corner.progress_time + 0.5, clear())  # a mers destul => nu e colț
+        s.run(s.cfg.corner.progress_time + 0.5, clear())  # walked far enough => not a corner
     assert s.brain.stats.big_turns == 0
     assert s.brain.stats.avoids == 5
 
@@ -259,7 +259,7 @@ def test_turn_that_never_clears_becomes_big_turn():
     assert s.brain.stats.big_turns >= 1
 
 
-# --- siguranță ---------------------------------------------------------------
+# --- safety -------------------------------------------------------------------
 def test_fall_stops_and_sends_no_walk_commands_until_upright():
     s = Sim()
     s.up()
@@ -268,8 +268,8 @@ def test_fall_stops_and_sends_no_walk_commands_until_upright():
     assert s.brain.state_name == "hold"
     s.run(5.0)
     kinds = [c.kind for _, _, c in s.log]
-    assert "move" not in kinds, "nu trebuie trimisă nicio comandă de mișcare cât e căzut"
-    assert kinds.count("stop") == 1, "stop o singură dată, nu în buclă"
+    assert "move" not in kinds, "no motion command may be sent while fallen"
+    assert kinds.count("stop") == 1, "stop once, not in a loop"
     assert s.brain.stats.holds_unsafe == 1
 
 
@@ -289,7 +289,7 @@ def test_flapping_health_restarts_the_delay():
     s.up()
     s.run(0.5, safe=False)
     s.run(1.0, safe=True)
-    s.run(0.1, safe=False)       # iar nesigur înainte de resume_delay
+    s.run(0.1, safe=False)       # unsafe again before resume_delay
     s.run(1.0, safe=True)
     assert s.brain.state_name == "hold"
 
@@ -316,9 +316,9 @@ def test_missing_depth_frames_stop_the_robot():
     assert s.brain.stats.holds_no_depth == 1
 
 
-# --- configurație -------------------------------------------------------------
+# --- configuration --------------------------------------------------------------
 def test_unknown_config_key_is_rejected():
-    with pytest.raises(ValueError, match="necunoscut"):
+    with pytest.raises(ValueError, match="unknown"):
         from_dict({"motion": {"forward_sped": 0.1}})
 
 

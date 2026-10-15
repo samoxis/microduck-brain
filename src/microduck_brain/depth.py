@@ -1,13 +1,14 @@
-"""Cadrele de adâncime 8x8 -> ce vede robotul în față.
+"""8x8 depth frames -> what the robot sees ahead.
 
-Convențiile vin din ``tof/src/lib.rs`` și din simulator (``sim/tof.py``): tablouri
-row-major, rândul 0 sus, coloana 0 în STÂNGA robotului. ``status`` 5 sau 9 = distanță
-valabilă (în mm, > 0), 255 = „nimic în rază" (spațiu liber), orice altceva = măsurătoare
-eșuată (nu spune nimic despre ce e acolo).
+Conventions come from ``tof/src/lib.rs`` and from the simulator (``sim/tof.py``): row-major
+arrays, row 0 at the top, column 0 on the robot's LEFT. ``status`` 5 or 9 = valid range (mm, > 0),
+255 = "nothing in range" (free space), anything else = failed measurement (says nothing about
+what is out there).
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from .config import Obstacle
@@ -15,10 +16,14 @@ from .config import Obstacle
 STATUS_VALID = (5, 9)
 STATUS_NO_TARGET = 255
 
+FOV_DEG = 45.0
+# Height of the ToF sensor above the trunk origin when standing (MJCF `tof` site, STAND keyframe).
+SENSOR_ABOVE_TRUNK = 0.126
+
 
 @dataclass(frozen=True)
 class DepthFrame:
-    """Un cadru brut, așa cum vine în ``tof.frame``."""
+    """One raw frame, as it arrives in ``tof.frame``."""
 
     rows: int
     cols: int
@@ -31,11 +36,11 @@ class DepthFrame:
         dist = tuple(int(v) for v in params["distance_mm"])
         status = tuple(int(v) for v in params["status"])
         if len(dist) != rows * cols or len(status) != rows * cols:
-            raise ValueError("cadru de adâncime cu dimensiuni inconsistente")
+            raise ValueError("depth frame with inconsistent dimensions")
         return cls(rows, cols, dist, status)
 
     def zone(self, row: int, col: int, max_range: float) -> float | None:
-        """Distanța în metri; ``max_range`` dacă nu e nimic în rază; ``None`` dacă a eșuat."""
+        """Range in metres; ``max_range`` if nothing is in range; ``None`` if the measurement failed."""
         i = row * self.cols + col
         status = self.status[i]
         if status in STATUS_VALID:
@@ -48,18 +53,18 @@ class DepthFrame:
 
 @dataclass(frozen=True)
 class View:
-    """Ce hotărăște creierul din cadru."""
+    """What the brain decides from a frame."""
 
-    blocked: bool          # obstacol în coridorul din față (sau senzor orb)
-    blind: bool            # prea puține zone măsurate ca să ne încredem
+    blocked: bool          # obstacle in the corridor ahead (or the sensor is blind)
+    blind: bool            # too few zones measured to trust the frame
     nearest_front: float | None
-    front: float | None    # distanța „robustă" în față: a min_zones-a cea mai mică (taie zgomotul)
-    left_free: float       # cât de liberă e partea stângă (m, mai mare = mai liber)
+    front: float | None    # robust distance ahead: the min_zones-th smallest (rejects single-zone noise)
+    left_free: float       # how free the left half is (m, larger = freer)
     right_free: float
 
     @property
     def freer_side(self) -> str | None:
-        """'left', 'right' sau None dacă sunt la fel."""
+        """'left', 'right', or None if they are about equal."""
         if abs(self.left_free - self.right_free) < 0.05:
             return None
         return "left" if self.left_free > self.right_free else "right"
@@ -79,10 +84,10 @@ def _column_minima(frame: DepthFrame, cfg: Obstacle, cols: range) -> list[float]
 
 
 def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None) -> View:
-    """Analizează un cadru. ``threshold`` = distanța sub care o zonă e „aproape"
-    (implicit ``stop_distance``; la ieșirea din întoarcere se dă ``clear_distance``)."""
+    """Analyse the wall rows of a frame. ``threshold`` = distance below which a zone is "near"
+    (``stop_distance`` by default; ``clear_distance`` when deciding a turn is finished)."""
     if frame.rows != 8 or frame.cols != 8:
-        raise ValueError(f"se așteaptă un cadru 8x8, am primit {frame.rows}x{frame.cols}")
+        raise ValueError(f"expected an 8x8 frame, got {frame.rows}x{frame.cols}")
     threshold = cfg.stop_distance if threshold is None else threshold
 
     rows = range(cfg.first_row, cfg.last_row + 1)
@@ -100,12 +105,12 @@ def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None) ->
     total = len(rows) * len(front_cols)
     blind = len(ranges) < cfg.blind_fraction * total
     k = max(1, cfg.min_zones)
-    # a k-a cea mai mică distanță: „obstacol" înseamnă cel puțin k zone mai aproape decât pragul
+    # The k-th smallest range: "obstacle" means at least k zones closer than the threshold.
     front = ranges[k - 1] if len(ranges) >= k else (cfg.max_range if ranges else None)
     blocked = blind or (front is not None and front < threshold)
 
-    # Cât de liber e fiecare jumătate: media celor mai apropiate distanțe pe coloană.
-    # Zonele eșuate nu contează; o jumătate fără nicio măsurătoare e 0 (nu o alegem).
+    # How free each half is: the mean of the per-column nearest ranges. Failed zones don't count;
+    # a half with no measurement at all scores 0 (never chosen).
     left = _column_minima(frame, cfg, range(0, 4))
     right = _column_minima(frame, cfg, range(4, 8))
     left_free = sum(left) / len(left) if left else 0.0
@@ -113,22 +118,19 @@ def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None) ->
     return View(blocked, blind, nearest, front, left_free, right_free)
 
 
-# ── obiecte joase ────────────────────────────────────────────────────────────────
+# ── Floor geometry ──────────────────────────────────────────────────────────────────
 #
-# În rândurile de jos senzorul vede și podeaua. Cu geometria cunoscută (înălțimea senzorului
-# deasupra podelei și unde „în jos" e față de fiecare rază) se poate calcula ce distanță ar măsura
-# pe podea goală; o citire vizibil mai scurtă e un obiect. Geometria vine din robot.state
-# (frames.tof, safety.gravity, odom.position[2]) — aceeași ca în filtrul de podea al lui robotd
-# (kinematics/src/tof.rs) — sau, dacă lipsește, din valorile nominale din [low].
-
-import math
-
-FOV_DEG = 45.0
+# In the bottom rows the sensor also sees the floor. With the geometry known (the sensor's height
+# above the floor and where "down" is relative to each beam) we can compute the range each zone
+# would read on an empty floor: a clearly shorter reading is an object, a clearly longer one (or
+# none at all) is a drop. The geometry comes from robot.state (frames.tof, safety.gravity,
+# odom.position[2]) — the same inputs robotd's own floor filter uses (kinematics/src/tof.rs) —
+# or, when missing, from the nominal values in [low].
 
 
 def _beams() -> list[tuple[float, float, float]]:
-    """Razele în cadrul senzorului (+x înainte, +y stânga, +z sus); rândul 0 sus, coloana 0 stânga.
-    Aceleași ca în sim/tof.py și kinematics/src/tof.rs (centrele zonelor, FOV 45°)."""
+    """Beam directions in the sensor frame (+x forward, +y left, +z up); row 0 top, column 0 left.
+    The same zone centres as sim/tof.py and kinematics/src/tof.rs (45° FOV)."""
     half = math.radians(FOV_DEG / 2.0 - FOV_DEG / 8 / 2.0)
     step = 2.0 * half / 7.0
     out = []
@@ -145,12 +147,12 @@ BEAMS = _beams()
 
 @dataclass(frozen=True)
 class Pose:
-    """Poza senzorului, așa cum o raportează robot.state."""
+    """The sensor's pose, as robot.state reports it."""
 
-    sensor_pos: tuple[float, float, float]            # frames.tof.pos, în trunchi (m)
-    sensor_quat: tuple[float, float, float, float]    # frames.tof.quat, [w,x,y,z], senzor -> trunchi
-    gravity: tuple[float, float, float]               # safety.gravity (în jos; în picioare ≈ [0,0,-1])
-    trunk_z: float | None                              # odom.position[2], înălțimea trunchiului
+    sensor_pos: tuple[float, float, float]            # frames.tof.pos, in the trunk frame (m)
+    sensor_quat: tuple[float, float, float, float]    # frames.tof.quat, [w,x,y,z], sensor -> trunk
+    gravity: tuple[float, float, float]               # safety.gravity (pointing down; standing ≈ [0,0,-1])
+    trunk_z: float | None                              # odom.position[2], trunk height above the floor
 
     @classmethod
     def from_state(cls, params: dict) -> "Pose | None":
@@ -162,7 +164,7 @@ class Pose:
             if len(pos) != 3 or len(quat) != 4 or len(grav) != 3:
                 return None
             if math.sqrt(sum(v * v for v in quat)) < 0.5 or math.sqrt(sum(v * v for v in grav)) < 0.5:
-                return None   # poză negăsită / IMU neconvergent: mai bine nimic decât ceva aleator
+                return None   # no pose yet / IMU not converged: nothing is better than something random
             z = (params.get("odom") or {}).get("position")
             trunk_z = float(z[2]) if z and len(z) == 3 else None
             return cls(pos, quat, grav, trunk_z)  # type: ignore[arg-type]
@@ -171,10 +173,10 @@ class Pose:
 
 
 def _rotate_inv(q: tuple[float, float, float, float], v: tuple[float, float, float]) -> tuple[float, float, float]:
-    """Rotește v cu inversul cuaternionului q = [w,x,y,z] (trunchi -> senzor)."""
+    """Rotate v by the inverse of quaternion q = [w,x,y,z] (trunk -> sensor)."""
     w, x, y, z = q
     n = math.sqrt(w * w + x * x + y * y + z * z)
-    w, x, y, z = w / n, -x / n, -y / n, -z / n   # conjugat
+    w, x, y, z = w / n, -x / n, -y / n, -z / n   # conjugate
     # v' = v + 2w(u × v) + 2 u × (u × v), u = (x,y,z)
     ux, uy, uz = x, y, z
     cx, cy, cz = uy * v[2] - uz * v[1], uz * v[0] - ux * v[2], ux * v[1] - uy * v[0]
@@ -184,15 +186,15 @@ def _rotate_inv(q: tuple[float, float, float, float], v: tuple[float, float, flo
 
 @dataclass(frozen=True)
 class FloorModel:
-    """Unde ar fi podeaua pe fiecare zonă."""
+    """Where the floor would be, per zone."""
 
-    height: float                    # înălțimea senzorului deasupra podelei (m)
-    down_sin: tuple[float, ...]      # sin(unghiul de coborâre față de orizontala LUMII), pe zonă (> 0 = privește în jos)
-    horizontal: tuple[float, ...]    # |componenta orizontală| a razei (pentru distanța pe sol)
+    height: float                    # sensor height above the floor (m)
+    down_sin: tuple[float, ...]      # sin(beam angle below the WORLD horizontal), per zone (> 0 = looks down)
+    horizontal: tuple[float, ...]    # |horizontal component| of each beam
 
     def expected(self, zone: int, tilt_deg: float = 0.0) -> float:
-        """Distanța înclinată așteptată pe podea goală, dacă senzorul ar fi înclinat în plus cu
-        ``tilt_deg`` spre podea (cel mai rău caz: podeaua apare mai aproape). ``inf`` = raza nu atinge podeaua."""
+        """Slant range expected on an empty floor if the sensor were tilted a further ``tilt_deg``
+        towards the floor (positive: the floor appears closer). ``inf`` = the beam never meets the floor."""
         s = self.down_sin[zone]
         alpha = math.asin(max(-1.0, min(1.0, s))) + math.radians(tilt_deg)
         if alpha <= 1e-3:
@@ -203,18 +205,18 @@ class FloorModel:
 def floor_model(pose: Pose | None, low) -> FloorModel:
     if pose is not None:
         gl = math.sqrt(sum(v * v for v in pose.gravity))
-        g = tuple(v / gl for v in pose.gravity)                    # unitar, în jos, în trunchi
-        g_s = _rotate_inv(pose.sensor_quat, g)                      # în cadrul senzorului
-        h = -sum(a * b for a, b in zip(pose.sensor_pos, g))         # componenta „sus" a poziției senzorului față de trunchi
+        g = tuple(v / gl for v in pose.gravity)                    # unit, pointing down, trunk frame
+        g_s = _rotate_inv(pose.sensor_quat, g)                      # the same, in the sensor frame
+        h = -sum(a * b for a, b in zip(pose.sensor_pos, g))         # "up" component of the sensor's offset
         if pose.trunk_z is not None and pose.trunk_z > 0.05:
             h += pose.trunk_z
         else:
-            h += low.nominal_height - 0.126                          # fără z de încredere: z nominal al trunchiului
+            h += low.nominal_height - SENSOR_ABOVE_TRUNK             # no trustworthy z: nominal trunk height
         if not 0.05 < h < 0.6:
             h = low.nominal_height
     else:
         th = math.radians(low.nominal_pitch_deg)
-        g_s = (math.sin(th), 0.0, -math.cos(th))                    # „în jos" în cadrul senzorului, pitch θ în jos
+        g_s = (math.sin(th), 0.0, -math.cos(th))                    # "down" in the sensor frame, pitched θ down
         h = low.nominal_height
     down_sin = tuple(sum(b * gg for b, gg in zip(beam, g_s)) for beam in BEAMS)
     horiz = tuple(math.sqrt(max(0.0, 1.0 - s * s)) for s in down_sin)
@@ -225,17 +227,17 @@ def floor_model(pose: Pose | None, low) -> FloorModel:
 class LowObstacle:
     row: int
     col: int
-    slant: float        # distanța măsurată (m)
-    forward: float      # înainte, în cadrul senzorului (m)
-    lateral: float      # stânga +, în cadrul senzorului (m)
-    ratio: float        # măsurat / așteptat pe podea (< 1 = mai aproape decât podeaua)
+    slant: float        # measured range (m)
+    forward: float      # ahead, in the sensor frame (m)
+    lateral: float      # left +, in the sensor frame (m)
+    ratio: float        # measured / expected floor range (< 1 = closer than the floor)
 
 
 def low_obstacles(frame: DepthFrame, pose: Pose | None, cfg) -> list[LowObstacle]:
-    """Zonele din rândurile de jos care măsoară vizibil mai aproape decât podeaua goală.
+    """Bottom-row zones that read clearly shorter than an empty floor.
 
-    ``cfg`` = Config. Toleranța la înclinare și marja de distanță acoperă eroarea de poză
-    (sincronizare, legănat) și zgomotul senzorului; fără poză toleranța e mai mare."""
+    ``cfg`` is the whole Config. The tilt tolerance and range margin absorb pose error (timing,
+    gait sway) and sensor noise; without a pose the tolerance is wider."""
     if frame.rows != 8 or frame.cols != 8:
         return []
     lo = cfg.low
@@ -250,36 +252,36 @@ def low_obstacles(frame: DepthFrame, pose: Pose | None, cfg) -> list[LowObstacle
             d = frame.distance_mm[i] / 1000.0
             exp_near = model.expected(i, tilt)
             if d >= exp_near * (1.0 - lo.range_margin):
-                continue                                # podea (sau mai departe)
+                continue                                # floor (or further)
             bx, by, _ = BEAMS[i]
             if d * bx < lo.min_range:
-                continue                                # sub ~10 cm senzorul dă citiri false
+                continue                                # under ~10 cm the sensor reports phantom returns
             exp_nom = model.expected(i, 0.0)
             ratio = d / exp_nom if math.isfinite(exp_nom) else 0.0
             out.append(LowObstacle(r, c, d, d * bx, d * by, ratio))
     return out
 
 
-# ── goluri (margini, scări în jos) ─────────────────────────────────────────────────
+# ── Drops (ledges, stairs going down) ───────────────────────────────────────────────────
 #
-# Unde podeaua ar trebui să se vadă sigur, o zonă care vede „nimic în rază" (status 255) sau o
-# distanță clar mai lungă decât podeaua înseamnă că acolo podeaua lipsește: o margine, o scară.
-# În simulator, o rază care intră în gaura scării din apartment trece pe sub placa de podea și
-# întoarce 255; un senzor real ar vedea treapta, adică o distanță mai lungă. Ambele contează.
+# Where the floor should be clearly visible, a zone reading "nothing in range" (status 255) or a
+# range clearly longer than the floor means the floor is missing there: a ledge, a staircase. In the
+# simulator a beam entering the apartment's stairwell passes under the floor slab and returns 255;
+# a real sensor would see the step, i.e. a longer range. Both count.
 
 
 @dataclass(frozen=True)
 class DropZone:
     row: int
     col: int
-    forward: float      # unde ar fi trebuit să fie podeaua: înainte, în cadrul senzorului (m)
-    lateral: float      # stânga +, în cadrul senzorului (m)
-    no_target: bool     # True = 255 (nimic), False = distanță mai lungă decât podeaua
+    forward: float      # where the floor should have been: ahead, in the sensor frame (m)
+    lateral: float      # left +, in the sensor frame (m)
+    no_target: bool     # True = 255 (nothing), False = a range longer than the floor
 
 
 def drop_zones(frame: DepthFrame, pose: Pose | None, cfg) -> list[DropZone]:
-    """Zonele din rândurile de jos unde podeaua lipsește. Gol doar dacă sunt cel puțin
-    ``drop.min_zones`` astfel de zone în cadru (o singură zonă ratată e zgomot)."""
+    """Bottom-row zones where the floor is missing. Reported only if at least ``drop.min_zones``
+    such zones are in the frame (a single missed zone is noise)."""
     if frame.rows != 8 or frame.cols != 8:
         return []
     dr = cfg.drop
@@ -291,8 +293,8 @@ def drop_zones(frame: DepthFrame, pose: Pose | None, cfg) -> list[DropZone]:
             i = r * 8 + c
             nominal = model.expected(i, 0.0)
             if not math.isfinite(nominal) or nominal > dr.max_expected:
-                continue                     # podeaua prea departe ca să fie văzută sigur
-            far = model.expected(i, -tilt)   # cel mai departe unde poate fi podeaua, cu capul ridicat
+                continue                     # floor too far away to be seen reliably
+            far = model.expected(i, -tilt)   # the furthest the floor can plausibly be, head tilted up
             if not math.isfinite(far):
                 continue
             status, d = frame.status[i], frame.distance_mm[i] / 1000.0
@@ -301,7 +303,7 @@ def drop_zones(frame: DepthFrame, pose: Pose | None, cfg) -> list[DropZone]:
             elif status in STATUS_VALID and d > far * (1.0 + dr.range_margin):
                 no_target = False
             else:
-                continue                     # podea (sau mai aproape: obiect) sau măsurătoare eșuată
+                continue                     # floor (or closer: an object), or a failed measurement
             bx, by, _ = BEAMS[i]
             out.append(DropZone(r, c, nominal * bx, nominal * by, no_target))
     return out if len(out) >= dr.min_zones else []

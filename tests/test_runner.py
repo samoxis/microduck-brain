@@ -1,4 +1,4 @@
-"""Test de integrare: Runner + un robot fals pe socket-uri unix reale (același NDJSON JSON-RPC)."""
+"""Integration tests: Runner + a fake robot on real unix sockets (the same NDJSON JSON-RPC)."""
 
 from __future__ import annotations
 
@@ -25,11 +25,11 @@ class FakeRobot:
         self.frame = clear()
         self.moves: list[tuple[float, dict]] = []
         self.stops = 0
-        # „corpul": rotirea reală = eff x cerută (+ deriva cât merge); raportat ca odom.yaw
+        # the "body": real turn rate = eff x commanded (+ drift while walking); reported as odom.yaw
         self.eff = 0.5
         self.bias = 0.0
-        self.yaw = 0.0                      # nedesfășurat
-        self.yaw_log: list[float] = []      # yaw-ul real în momentul fiecărei comenzi
+        self.yaw = 0.0                      # not wrapped
+        self.yaw_log: list[float] = []      # true yaw at the moment of each command
         self._closed = False
         outer = self
 
@@ -39,7 +39,7 @@ class FakeRobot:
                 time.sleep(0.01)
                 now = time.monotonic()
                 dt, last = now - last, now
-                if outer.moves and now - outer.moves[-1][0] < 0.5:     # deadman ca la robotd
+                if outer.moves and now - outer.moves[-1][0] < 0.5:     # deadman, like robotd
                     m = outer.moves[-1][1]
                     outer.yaw += (outer.eff * m["vyaw"] + (outer.bias if m["vx"] > 0 else 0.0)) * dt
 
@@ -151,10 +151,10 @@ def test_fall_stops_walk_commands_until_upright(robot):
     assert wait_for(lambda: any(m["vx"] > 0 for _, m in robot.moves))
     robot.fallen = True
     assert wait_for(lambda: robot.stops >= 1)
-    time.sleep(0.3)  # lasă să se așeze
+    time.sleep(0.3)  # let it settle
     n = len(robot.moves)
     time.sleep(1.0)
-    assert len(robot.moves) == n, "nicio comandă de mers cât robotul e căzut"
+    assert len(robot.moves) == n, "no walking command while the robot is down"
     robot.fallen = False
     assert wait_for(lambda: len(robot.moves) > n and robot.moves[-1][1]["vx"] > 0, 4)
     stop(runner, t)
@@ -169,19 +169,19 @@ def test_unhealthy_robot_gets_no_walk_commands(robot):
 
 
 def test_big_turn_closed_loop_over_sockets_uses_the_measured_angle(robot):
-    """Robotul fals se rotește doar cu 50% din rata cerută: un cronometru l-ar opri la jumătate."""
+    """The fake robot turns at only 50% of the commanded rate: a timer would stop it halfway."""
     robot.frame = wall_ahead()
     runner, t = start(
         robot,
         corner={"turns_before_big_turn": 1, "big_turn_degrees": 90.0},
         motion={"big_turn_speed": 1.4},
     )
-    # prima rotire în loc, continuă (vx == 0, vyaw != 0) până se oprește
+    # the first turn in place, continuous (vx == 0, vyaw != 0) until it stops
     def spinning():
         return [i for i, (_, m) in enumerate(robot.moves) if m["vx"] == 0 and m["vyaw"] != 0]
     assert wait_for(lambda: len(spinning()) > 5, 4)
     first = spinning()[0]
-    robot.frame = clear()          # după întoarcere drumul e liber
+    robot.frame = clear()          # after the turn the way is clear
     assert wait_for(lambda: robot.moves[-1][1]["vx"] > 0, 8)
     last_spin = max(i for i in spinning() if i < len(robot.moves) - 1)
     stop(runner, t)
@@ -197,20 +197,20 @@ def test_heading_hold_over_sockets_cancels_drift(robot):
     y0 = robot.yaw
     time.sleep(6.0)
     stop(runner, t)
-    assert abs(robot.yaw - y0) < 0.35, "fără corecție ar fi ~0.7 rad în 6 s"
-    assert any(abs(m["vyaw"]) > 0.01 for _, m in robot.moves), "corecția trebuie să apară în comenzi"
+    assert abs(robot.yaw - y0) < 0.35, "without correction it would be ~0.7 rad in 6 s"
+    assert any(abs(m["vyaw"]) > 0.01 for _, m in robot.moves), "the correction must show up in the commands"
 
 
 def test_low_obstacle_is_avoided_over_sockets_and_ignored_in_ignore_mode(robot):
     from .lowgeo import render
 
-    robot.frame = render(("cube", 0.6, 0.07))        # cub de 7 cm drept în față, vizibil în rândul 7
+    robot.frame = render(("cube", 0.6, 0.07))        # 7 cm cube straight ahead, visible in row 7
 
     runner, t = start(robot, low={"memory_seconds": 0.0})
     assert wait_for(lambda: any(m["vx"] > 0 and abs(m["vyaw"]) > 0.1 for _, m in robot.moves), 4), \
-        "trebuie să vireze din mers spre obiectul jos"
+        "it must steer away from the low object while walking"
     stop(runner, t)
-    assert runner.brain.stats.low_seen == 0           # memoria oprită: nimic reținut, obiectul e doar văzut
+    assert runner.brain.stats.low_seen == 0           # memory off: nothing remembered, the object is only seen
 
     robot.moves.clear()
     runner, t = start(robot, obstacle={"low_obstacles": "ignore"})
@@ -218,11 +218,11 @@ def test_low_obstacle_is_avoided_over_sockets_and_ignored_in_ignore_mode(robot):
     time.sleep(1.5)
     stop(runner, t)
     walking = [m for _, m in robot.moves if m["vx"] > 0]
-    assert walking and all(abs(m["vyaw"]) < 0.05 for m in walking), "în ignore nu virează"
+    assert walking and all(abs(m["vyaw"]) < 0.05 for m in walking), "in ignore mode it does not steer"
 
 
 def paired_pose(runner):
-    """Poza asociată cadrului, citită sub lacăt (fără robot.health: conexiunea e a buclei runner-ului)."""
+    """The pose paired with the frame, read under the lock (no robot.health: that connection belongs to the runner loop)."""
     with runner._lock:
         return runner._pose_for_frame()
 
@@ -240,5 +240,5 @@ def test_runner_drops_a_pose_that_is_too_far_from_the_frame_in_time(robot):
     assert wait_for(lambda: paired_pose(runner) is not None, 3)
     stop(runner, t)
     with runner._lock:
-        runner._frame_t_ns += 5_000_000_000       # cadrul „din viitor": nicio poză la 100 ms
+        runner._frame_t_ns += 5_000_000_000       # a frame "from the future": no pose within 100 ms
     assert runner._pose_for_frame() is None

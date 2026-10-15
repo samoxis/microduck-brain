@@ -1,5 +1,5 @@
-"""Generator de cadre ToF sintetice: ray-cast pe o podea plată + un cub/o minge, cu aceleași raze ca
-simulatorul (sim/tof.py). Folosit în teste ca să nu depindă doar de fixture-urile înregistrate."""
+"""Synthetic ToF frame generator: ray-casting onto a flat floor + one cube/ball, with the same beams as
+the simulator (sim/tof.py). Used so the tests don't depend on recorded fixtures alone."""
 
 from __future__ import annotations
 
@@ -8,15 +8,15 @@ import math
 from microduck_brain.depth import BEAMS, STATUS_NO_TARGET, DepthFrame, Pose
 
 NOMINAL_H = 0.246
-SENSOR_X = 0.0643        # senzorul față de originea trunchiului, înainte
+SENSOR_X = 0.0643        # sensor ahead of the trunk origin
 MAX_RANGE = 4.0
 
 
-SENSOR_POS = (SENSOR_X, 0.0224, NOMINAL_H - 0.12)   # senzorul în trunchi (trunchiul stă la z = 0.12)
+SENSOR_POS = (SENSOR_X, 0.0224, NOMINAL_H - 0.12)   # sensor in the trunk frame (the trunk stands at z = 0.12)
 
 
 def _trunk_rotation(pitch_deg: float, roll_deg: float):
-    """Trunchi -> lume: R = Rx(roll) Ry(pitch); pitch + = nasul în jos (ca în fixture-uri)."""
+    """Trunk -> world: R = Rx(roll) Ry(pitch); pitch + = nose down (as in the fixtures)."""
     p, r = math.radians(pitch_deg), math.radians(roll_deg)
     cr, sr, cp, sp = math.cos(r), math.sin(r), math.cos(p), math.sin(p)
     Rx = [[1, 0, 0], [0, cr, -sr], [0, sr, cr]]
@@ -25,7 +25,7 @@ def _trunk_rotation(pitch_deg: float, roll_deg: float):
 
 
 def pose_for(pitch_deg: float = 0.0, roll_deg: float = 0.0, trunk_z: float = 0.12) -> Pose:
-    """Poza pe care ar raporta-o robotul cu trunchiul înclinat (capul drept față de trunchi)."""
+    """The pose the robot would report with its trunk tilted (head straight relative to the trunk)."""
     R = _trunk_rotation(pitch_deg, roll_deg)
     gravity = tuple(-R[2][i] for i in range(3))             # R^T (0,0,-1)
     return Pose(SENSOR_POS, (1.0, 0.0, 0.0, 0.0), gravity, trunk_z)
@@ -33,10 +33,10 @@ def pose_for(pitch_deg: float = 0.0, roll_deg: float = 0.0, trunk_z: float = 0.1
 
 def render(obj: tuple | None = None, noise: float = 0.0, rng=None,
            pitch_deg: float = 0.0, roll_deg: float = 0.0, trunk_z: float = 0.12) -> DepthFrame:
-    """Cadru ToF pentru un trunchi înclinat cu pitch/roll, pe o podea plată (z = 0).
+    """ToF frame for a trunk tilted by pitch/roll, over a flat floor (z = 0).
 
-    obj = ("cube", x, size[, lateral]) sau ("ball", x, size[, lateral]); x = fața din față a obiectului,
-    măsurată de la ORIGINEA TRUNCHIULUI (ca în fixture-uri; senzorul e cu 6.4 cm mai în față)."""
+    obj = ("cube", x, size[, lateral]) or ("ball", x, size[, lateral]); x = the object's near face,
+    measured from the TRUNK ORIGIN (as in the fixtures; the sensor is 6.4 cm further forward)."""
     R = _trunk_rotation(pitch_deg, roll_deg)
     off = tuple(sum(R[i][k] * SENSOR_POS[k] for k in range(3)) for i in range(3))
     origin = (off[0], off[1], trunk_z + off[2])

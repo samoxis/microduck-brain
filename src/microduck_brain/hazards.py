@@ -1,44 +1,41 @@
-"""Pericolele care nu sunt pereți: obiecte joase (cuburi, mingi) și goluri (margini, scări în jos).
+"""Hazards that are not walls: low objects (cubes, balls) and drops (ledges, stairs going down).
 
-Amândouă se văd doar în rândurile de jos ale cadrului și doar pe o fereastră scurtă: un cub de 7 cm
-dispare sub cea mai de jos rază când robotul se apropie la ~45 cm, iar o gaură îngustă dispare când
-razele încep să aterizeze pe podeaua de dincolo de ea. De aceea fiecare pericol confirmat e ținut
-minte în coordonatele odometriei (``odom.position``, ``odom.yaw``) și folosit și după ce nu se mai vede.
+Both are visible only in the bottom rows of the frame, and only through a short window: a 7 cm
+cube disappears under the lowest beam once the robot is within ~45 cm, and a narrow hole disappears
+once the beams start landing on the floor beyond it. So every confirmed hazard is remembered in the
+odometry frame (``odom.position``, ``odom.yaw``) and still used after it can no longer be seen.
 
-``HazardMap.update`` se cheamă o dată pe tick; ``HazardMap.merge`` adaugă pericolele la vederea din
-față (``View``), ca stările să nu știe de unde vine un obstacol.
+``HazardMap.update`` runs once per tick; ``HazardMap.merge`` adds the hazards to the view ahead
+(``View``), so the states never need to know where an obstacle came from.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from .depth import DepthFrame, Pose, View, drop_zones, low_obstacles
 
 LOW = "low"
 DROP = "drop"
 
-MAX_POINTS = 400        # memorie limitată: cele mai vechi puncte pleacă primele
+MAX_POINTS = 400        # bounded memory: the oldest points go first
 
 
 @dataclass(frozen=True)
 class Hazard:
-    forward: float      # înainte, în cadrul senzorului (m)
-    lateral: float      # stânga +, în cadrul senzorului (m)
+    forward: float      # ahead, in the sensor frame (m)
+    lateral: float      # left +, in the sensor frame (m)
     kind: str           # LOW | DROP
 
 
 @dataclass
 class _Kind:
-    """Confirmarea în timp și memoria pentru un fel de pericol."""
+    """Confirmation over time, and memory, for one kind of hazard."""
 
     kind: str
     first: float | None = None
-    points: list | None = None      # [x, y, t] în lumea odometriei
-
-    def __post_init__(self) -> None:
-        self.points = []
+    points: list[list[float]] = field(default_factory=list)   # [x, y, t] in the odometry frame
 
 
 class HazardMap:
@@ -48,7 +45,7 @@ class HazardMap:
         self._kinds = {LOW: _Kind(LOW), DROP: _Kind(DROP)}
         self.items: list[Hazard] = []
 
-    # --- configurație pe fel ----------------------------------------------------
+    # --- per-kind configuration ---------------------------------------------------
     def _enabled(self, kind: str) -> bool:
         o = self.cfg.obstacle
         return (o.low_obstacles if kind == LOW else o.drops) == "avoid"
@@ -65,9 +62,9 @@ class HazardMap:
     def _half_width(self, kind: str) -> float:
         return self.cfg.low.corridor_half_width if kind == LOW else self.cfg.drop.corridor_half_width
 
-    # --- memorie ----------------------------------------------------------------
+    # --- memory -------------------------------------------------------------------
     def forget(self) -> None:
-        """După o cădere: poziția odometriei nu mai e de încredere."""
+        """After a fall: the odometry's position can no longer be trusted."""
         for k in self._kinds.values():
             k.first = None
             k.points.clear()
@@ -89,7 +86,7 @@ class HazardMap:
             k.points.pop(0)
         return True
 
-    # --- pe tick ----------------------------------------------------------------
+    # --- per tick -----------------------------------------------------------------
     def update(self, frame: DepthFrame | None, pose: Pose | None, pos, yaw: float | None,
                safe: bool, now: float) -> list[Hazard]:
         self.items = []
@@ -129,7 +126,7 @@ class HazardMap:
                 if kind == LOW:
                     self.stats.low_seen += new
                 elif new and not any(now - p[2] < 1.0 for p in k.points[:-new]):
-                    self.stats.drops_seen += 1      # un gol nou, nu încă un punct din același
+                    self.stats.drops_seen += 1      # a new drop, not one more point of the same one
 
             if memory <= 0:
                 k.points.clear()
@@ -140,22 +137,22 @@ class HazardMap:
                 if now - p[2] > memory:
                     continue
                 dx, dy = p[0] - pos[0], p[1] - pos[1]
-                rx, ry = c * dx + s * dy, -s * dx + c * dy       # cadrul trunchiului
+                rx, ry = c * dx + s * dy, -s * dx + c * dy       # trunk frame
                 fwd = rx - sx
-                # Un obiect jos depășit nu mai contează. Un gol rămâne cât ține memoria: robotul se poate
-                # întoarce spre el, iar o gaură nu pleacă nicăieri.
+                # A low object left behind no longer matters. A drop stays for as long as the memory
+                # lasts: the robot may turn back towards it, and a hole doesn't go anywhere.
                 if kind == LOW and (fwd < -0.15 or fwd > 2.0):
                     continue
                 keep.append(p)
                 if confirmed and any(abs(f - fwd) < 0.05 and abs(lat - ry) < 0.05 for f, lat in found):
-                    continue                                        # deja în lista curentă
+                    continue                                        # already in the current list
                 self.items.append(Hazard(fwd, ry, kind))
             k.points = keep
         return self.items
 
-    # --- în vederea din față ------------------------------------------------------
+    # --- into the view ahead ----------------------------------------------------------
     def merge(self, view: View, threshold: float) -> View:
-        """Adaugă pericolele din coridorul robotului la vederea din față."""
+        """Add the hazards inside the robot's corridor to the view ahead."""
         if not self.items:
             return view
         front, blocked = view.front, view.blocked
@@ -163,7 +160,7 @@ class HazardMap:
         for h in self.items:
             if abs(h.lateral) > self._half_width(h.kind) or h.forward < -0.1:
                 continue
-            # tratat ca mai aproape: reacție fermă, fiindcă pericolul se vede doar pe o fereastră scurtă
+            # Treated as closer than it is: react firmly, because the hazard is visible only briefly.
             f = h.forward - self._clearance(h.kind)
             front = f if front is None else min(front, f)
             blocked = blocked or f < threshold

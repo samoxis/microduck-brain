@@ -1,12 +1,12 @@
-"""JSON-RPC 2.0 prin socket-uri unix, un obiect pe linie (NDJSON).
+"""JSON-RPC 2.0 over unix sockets, one object per line (NDJSON).
 
-Formatul vine din ``duck-ipc-proto`` și din ``robotctl``:
+The wire format is taken from ``duck-ipc-proto`` and ``robotctl``, not guessed:
 
-* ``robot.move`` este o *notificare* (fără ``id``), continuă, trimisă la 20-50 Hz; robotul
-  o lasă să expire (deadman, ~500 ms) dacă nu mai vin comenzi;
-* ``robot.stop``, ``robot.health`` sunt *cereri* cu ``id`` și răspuns;
-* ``tof.stream`` (pe socket-ul lui ``tofd``) și ``robot.subscribe`` (pe cel al lui
-  ``robotd``) transformă conexiunea într-un flux de notificări ``tof.frame`` / ``robot.state``.
+* ``robot.move`` is a *notification* (no ``id``), continuous, sent at 20-50 Hz; the robot lets
+  it expire (deadman, ~500 ms) when commands stop arriving;
+* ``robot.stop`` and ``robot.health`` are *requests* with an ``id`` and a response;
+* ``tof.stream`` (on ``tofd``'s socket) and ``robot.subscribe`` (on ``robotd``'s) turn the
+  connection into a stream of ``tof.frame`` / ``robot.state`` notifications.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def _encode(method: str, params: dict | None, id_: int | None) -> bytes:
 
 
 class Link:
-    """Conexiunea de comenzi către ``robotd``: cereri sincrone + notificări."""
+    """The command connection to ``robotd``: synchronous requests + notifications."""
 
     def __init__(self, path: str, timeout: float = 2.0) -> None:
         self.path = path
@@ -72,7 +72,7 @@ class Link:
 
     def notify(self, method: str, params: dict | None = None) -> None:
         if self._sock is None:
-            raise OSError("neconectat")
+            raise OSError("not connected")
         try:
             self._sock.sendall(_encode(method, params, None))
         except OSError:
@@ -81,7 +81,7 @@ class Link:
 
     def call(self, method: str, params: dict | None = None) -> dict:
         if self._sock is None or self._file is None:
-            raise OSError("neconectat")
+            raise OSError("not connected")
         id_ = self._next_id
         self._next_id += 1
         try:
@@ -90,23 +90,23 @@ class Link:
             while time.monotonic() < deadline:
                 line = self._file.readline()
                 if not line:
-                    raise OSError("conexiune închisă de robot")
+                    raise OSError("connection closed by the robot")
                 msg = json.loads(line)
                 if msg.get("id") != id_:
-                    continue  # notificări sau răspunsuri vechi
+                    continue  # notifications or stale responses
                 if "error" in msg and msg["error"]:
                     raise RpcError(f"{method}: {msg['error']}")
                 return msg.get("result") or {}
-            raise OSError(f"{method}: fără răspuns în {self.timeout}s")
+            raise OSError(f"{method}: no response within {self.timeout}s")
         except (OSError, json.JSONDecodeError):
             self.close()
             raise
 
 
 class Stream(threading.Thread):
-    """Fir care ține o conexiune abonată și apelează ``on_message(method, params)``.
+    """A thread that keeps a subscribed connection open and calls ``on_message(method, params)``.
 
-    Se reconectează singur; ``connected`` arată dacă abonamentul e viu.
+    It reconnects on its own; ``connected`` tells whether the subscription is live.
     """
 
     def __init__(
