@@ -3,6 +3,8 @@ name = "microduck-brain"
 version = "0.3.0"
 description = "Autonomous behaviour layer for the Microduck biped: obstacle, low-object and drop avoidance over the robot's public JSON-RPC API."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = []  # standard library only, on purpose
 
