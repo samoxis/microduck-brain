@@ -258,3 +258,50 @@ def low_obstacles(frame: DepthFrame, pose: Pose | None, cfg) -> list[LowObstacle
             ratio = d / exp_nom if math.isfinite(exp_nom) else 0.0
             out.append(LowObstacle(r, c, d, d * bx, d * by, ratio))
     return out
+
+
+# ── goluri (margini, scări în jos) ─────────────────────────────────────────────────
+#
+# Unde podeaua ar trebui să se vadă sigur, o zonă care vede „nimic în rază" (status 255) sau o
+# distanță clar mai lungă decât podeaua înseamnă că acolo podeaua lipsește: o margine, o scară.
+# În simulator, o rază care intră în gaura scării din apartment trece pe sub placa de podea și
+# întoarce 255; un senzor real ar vedea treapta, adică o distanță mai lungă. Ambele contează.
+
+
+@dataclass(frozen=True)
+class DropZone:
+    row: int
+    col: int
+    forward: float      # unde ar fi trebuit să fie podeaua: înainte, în cadrul senzorului (m)
+    lateral: float      # stânga +, în cadrul senzorului (m)
+    no_target: bool     # True = 255 (nimic), False = distanță mai lungă decât podeaua
+
+
+def drop_zones(frame: DepthFrame, pose: Pose | None, cfg) -> list[DropZone]:
+    """Zonele din rândurile de jos unde podeaua lipsește. Gol doar dacă sunt cel puțin
+    ``drop.min_zones`` astfel de zone în cadru (o singură zonă ratată e zgomot)."""
+    if frame.rows != 8 or frame.cols != 8:
+        return []
+    dr = cfg.drop
+    model = floor_model(pose, cfg.low)
+    tilt = cfg.low.tilt_tolerance_deg if pose is not None else cfg.low.tilt_tolerance_nopose_deg
+    out = []
+    for r in range(cfg.obstacle.last_row + 1, 8):
+        for c in range(8):
+            i = r * 8 + c
+            nominal = model.expected(i, 0.0)
+            if not math.isfinite(nominal) or nominal > dr.max_expected:
+                continue                     # podeaua prea departe ca să fie văzută sigur
+            far = model.expected(i, -tilt)   # cel mai departe unde poate fi podeaua, cu capul ridicat
+            if not math.isfinite(far):
+                continue
+            status, d = frame.status[i], frame.distance_mm[i] / 1000.0
+            if status == STATUS_NO_TARGET:
+                no_target = True
+            elif status in STATUS_VALID and d > far * (1.0 + dr.range_margin):
+                no_target = False
+            else:
+                continue                     # podea (sau mai aproape: obiect) sau măsurătoare eșuată
+            bx, by, _ = BEAMS[i]
+            out.append(DropZone(r, c, nominal * bx, nominal * by, no_target))
+    return out if len(out) >= dr.min_zones else []

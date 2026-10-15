@@ -40,6 +40,7 @@ class Obstacle:
     steer_yaw_max: float = 0.8
     steer_slew: float = 3.0
     low_obstacles: str = "avoid"
+    drops: str = "avoid"
 
 
 @dataclass
@@ -57,6 +58,19 @@ class Low:
     corridor_half_width: float = 0.15
     memory_seconds: float = 12.0
     extra_clearance: float = 0.15
+
+
+@dataclass
+class Drop:
+    """Goluri: margini, scări în jos."""
+
+    max_expected: float = 1.2
+    range_margin: float = 0.10
+    min_zones: int = 2
+    confirm_time: float = 0.12
+    clearance: float = 0.45
+    corridor_half_width: float = 0.18
+    memory_seconds: float = 120.0
 
 
 @dataclass
@@ -97,6 +111,7 @@ class Config:
     motion: Motion = field(default_factory=Motion)
     obstacle: Obstacle = field(default_factory=Obstacle)
     low: Low = field(default_factory=Low)
+    drop: Drop = field(default_factory=Drop)
     corner: Corner = field(default_factory=Corner)
     heading: Heading = field(default_factory=Heading)
     safety: Safety = field(default_factory=Safety)
@@ -116,6 +131,13 @@ class Config:
             raise ValueError("obstacle: steer_yaw_max >= 0, steer_slew > 0, min_turn_degrees >= 0")
         if o.low_obstacles not in ("avoid", "ignore"):
             raise ValueError("obstacle: low_obstacles trebuie să fie 'avoid' sau 'ignore'")
+        if o.drops not in ("avoid", "ignore"):
+            raise ValueError("obstacle: drops trebuie să fie 'avoid' sau 'ignore'")
+        dr = self.drop
+        if dr.max_expected <= 0 or not 0 <= dr.range_margin < 1 or dr.min_zones < 1 or dr.confirm_time < 0:
+            raise ValueError("drop: max_expected > 0, range_margin în [0, 1), min_zones >= 1, confirm_time >= 0")
+        if dr.clearance < 0 or dr.corridor_half_width <= 0 or dr.memory_seconds < 0:
+            raise ValueError("drop: clearance >= 0, corridor_half_width > 0, memory_seconds >= 0")
         lo = self.low
         if lo.nominal_height <= 0 or lo.tilt_tolerance_deg < 0 or lo.tilt_tolerance_nopose_deg < lo.tilt_tolerance_deg:
             raise ValueError("low: nominal_height > 0 și 0 <= tilt_tolerance_deg <= tilt_tolerance_nopose_deg")

@@ -221,17 +221,23 @@ def test_low_obstacle_is_avoided_over_sockets_and_ignored_in_ignore_mode(robot):
     assert walking and all(abs(m["vyaw"]) < 0.05 for m in walking), "în ignore nu virează"
 
 
+def paired_pose(runner):
+    """Poza asociată cadrului, citită sub lacăt (fără robot.health: conexiunea e a buclei runner-ului)."""
+    with runner._lock:
+        return runner._pose_for_frame()
+
+
 def test_runner_pairs_the_frame_with_the_nearest_state_pose(robot):
     runner, t = start(robot)
-    assert wait_for(lambda: runner.inputs(runner.clock()).pose is not None, 3)
-    pose = runner.inputs(runner.clock()).pose
+    assert wait_for(lambda: paired_pose(runner) is not None, 3)
+    pose = paired_pose(runner)
     assert pose.sensor_pos == (0.0643, 0.0224, 0.126) and pose.trunk_z == 0.12
     stop(runner, t)
 
 
 def test_runner_drops_a_pose_that_is_too_far_from_the_frame_in_time(robot):
     runner, t = start(robot)
-    assert wait_for(lambda: runner.inputs(runner.clock()).pose is not None, 3)
+    assert wait_for(lambda: paired_pose(runner) is not None, 3)
     stop(runner, t)
     with runner._lock:
         runner._frame_t_ns += 5_000_000_000       # cadrul „din viitor": nicio poză la 100 ms

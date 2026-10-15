@@ -11,18 +11,24 @@ import pytest
 
 from microduck_brain.brain import Brain, Inputs
 from microduck_brain.config import Config, from_dict
-from microduck_brain.depth import STATUS_NO_TARGET, DepthFrame, analyse
+from microduck_brain.depth import STATUS_NO_TARGET, DepthFrame, analyse, floor_model
 
 FAR = 3.0
 
 
+_FLOOR = floor_model(None, Config().low)
+
+
 def frame(fn=None, fill=FAR) -> DepthFrame:
     """Cadru 8x8; ``fn(row, col)`` întoarce metri, ``None`` = măsurătoare eșuată,
-    ``"free"`` = nimic în rază."""
+    ``"free"`` = nimic în rază. „Departe" (FAR) în rândurile de jos înseamnă podeaua: un robot în
+    picioare vede mereu podeaua acolo (rândurile 5-7: 1.68 / 1.01 / 0.73 m)."""
     dist, status = [], []
     for r in range(8):
         for c in range(8):
             v = fill if fn is None else fn(r, c)
+            if r >= 5 and v == FAR:
+                v = _FLOOR.expected(r * 8 + c)
             if v is None:
                 dist.append(0), status.append(12)
             elif v == "free":

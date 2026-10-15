@@ -13,11 +13,13 @@ Ce face:
    loc (sub `stop_distance`);
 3. **vede obiecte joase** (cuburi, mingi) în rândurile de jos ale cadrului și le ocolește; comutator
    `low_obstacles = "avoid" | "ignore"` (vezi mai jos, inclusiv limita geometrică);
-4. dacă ajunge de mai multe ori la frână fără să apuce să meargă înainte (colț), face o întoarcere
+4. **se ferește de goluri** (margini, scări în jos, ca scara din coridorul apartamentului) și le ține
+   minte; comutator `drops = "avoid" | "ignore"`;
+5. dacă ajunge de mai multe ori la frână fără să apuce să meargă înainte (colț), face o întoarcere
    mare; **rotirile se măsoară din `odom.yaw`**, nu din timp;
-5. dacă robotul raportează că a căzut sau că nu e sănătos, **nu mai trimite comenzi de mers** până e
+6. dacă robotul raportează că a căzut sau că nu e sănătos, **nu mai trimite comenzi de mers** până e
    din nou în picioare (și mai așteaptă `resume_delay`);
-6. la Ctrl+C (sau SIGTERM) trimite `robot.stop` și iese curat, cu un rezumat.
+7. la Ctrl+C (sau SIGTERM) trimite `robot.stop` și iese curat, cu un rezumat.
 
 ## Pornire pe PC (WSL Ubuntu)
 
@@ -126,6 +128,24 @@ distanță (apărut sub nivelul razelor) nu poate fi detectat.
 | `memory_seconds` | cât ține minte un obiect după ce iese din câmp. 0 = fără memorie. Se șterge la cădere. |
 | `extra_clearance` | obiectul jos se tratează ca fiind cu atâta mai aproape; obiectul se vede doar scurt, deci reacția trebuie să fie fermă. 0,15 dă ~5 cm spațiu în teste, fără frână; la 0 abia scapă; la 0,30 începe să frâneze degeaba. |
 
+### `[drop]` — goluri
+Unde podeaua ar trebui să se vadă sigur (rândurile 6–7, podeaua la 0,7–1,0 m), o zonă care vede
+„nimic în rază" sau o distanță clar mai lungă decât podeaua înseamnă că podeaua lipsește. În
+simulator, razele care intră în gaura scării trec pe sub placa de podea și întorc „nimic"; un senzor
+real ar vedea treptele, deci o distanță mai lungă (acest caz apare în simulare dinspre sud). Golul
+confirmat oprește robotul cu `clearance` înainte și e ținut minte `memory_seconds`: o gaură îngustă se
+vede doar pe o fereastră (din vest, la 0,4–0,6 m), apoi razele aterizează pe podeaua de dincolo.
+Verificat pe 109 cadre MuJoCo din apartment (inclusiv 64 din camere, fără nicio alarmă falsă).
+
+| Cheie | Ce face |
+|---|---|
+| `max_expected` | se folosesc doar zonele cu podeaua așteptată mai aproape de atât; mai departe, un senzor real ratează des podeaua și ar da alarme false. |
+| `range_margin` | cât de mai lungă decât cea mai îndepărtată podea plauzibilă trebuie să fie citirea. |
+| `min_zones`, `confirm_time` | câte zone și cât timp, ca o zonă ratată să nu oprească robotul. |
+| `clearance` | golul se tratează ca fiind cu atâta mai aproape: robotul oprește mult înainte de margine. |
+| `corridor_half_width` | lățimea (pe jumătate) a culoarului în care un gol contează. |
+| `memory_seconds` | cât ține minte un gol. Se uită la cădere. |
+
 ### `[corner]`
 | Cheie | Ce face |
 |---|---|
@@ -165,7 +185,8 @@ Direcția țintă se reia din direcția curentă de fiecare dată când drumul s
 ```
 src/microduck_brain/
   config.py   configurația (dataclass-uri + TOML, chei necunoscute respinse)
-  depth.py    cadru 8×8 -> „blocat?”, „care parte e mai liberă?”
+  depth.py    cadru 8×8 -> „blocat?”, „care parte e mai liberă?”, podeaua așteptată, obiecte joase, goluri
+  hazards.py  obiectele joase și golurile: confirmare în timp + memorie în coordonate odom
   brain.py    mașina de stări; logică pură, fără socket-uri și fără ceas propriu
   ipc.py      JSON-RPC pe socket unix (cereri, notificări, fluxuri abonate)
   runner.py   buclă: citește senzorii, apelează Brain.tick, trimite comenzi
@@ -193,7 +214,8 @@ Detalii în docstring-ul din `brain.py`.
   (`kp`, `ki`, `steer_yaw_max`, `slow_distance`); testele le verifică doar pe un model simplu.
 * Dacă politica ignoră comenzi mici de rotire cât merge, corecția de direcție poate fi înghițită.
 * Nu vede obiecte jos care apar sub cea mai de jos rază fără să fi fost văzute de la distanță (vezi `[low]`).
-* Nu detectează goluri (podeaua mai departe decât se așteaptă, ex. capătul unei scări în jos) și nici sticlă.
+* Un gol mai îngust decât zona oarbă din fața robotului (~0,7 m), apropiat din lateral fără să fi fost
+  văzut înainte, nu poate fi detectat (din est, gaura scării nu se vede deloc). Nu vede sticla.
 * Obiectele joase văzute doar de la mare distanță pot fi ratate între raze (mingea de 8 cm la ~0,7 m).
 * Memoria folosește `odom.position` (x, y); se presupune că `odom.yaw` crește spre stânga, ca în v1.
 * Orientarea senzorului (coloana 0 = stânga) e luată din simulator și din `tofd`; pe robotul real

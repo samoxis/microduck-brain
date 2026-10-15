@@ -3,6 +3,7 @@
 Rulează cu venv-ul lui microduck_rl (nu face parte din testele obișnuite):
 
     cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py
+    cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py --drop   # scara
 
 Fiecare cadru vine cu poza pe care ar raporta-o robotul în robot.state: poziția și orientarea
 senzorului în trunchi (frames.tof, [w,x,y,z]), gravitația proiectată în trunchi și înălțimea trunchiului.
@@ -19,12 +20,14 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-RL = Path.home() / "microduck_rl" if len(sys.argv) < 2 else Path(sys.argv[1])
+_args = [a for a in sys.argv[1:] if not a.startswith("--")]
+RL = Path(_args[0]) if _args else Path.home() / "microduck_rl"
 sys.path.insert(0, str(RL / "src"))
 from mjlab_microduck.sim.tof import Tof  # noqa: E402
 
 D = RL / "src/mjlab_microduck/robot/microduck"
 OUT = Path(__file__).resolve().parent.parent / "tests/fixtures/mujoco_low.json"
+OUT_DROP = Path(__file__).resolve().parent.parent / "tests/fixtures/mujoco_drop.json"
 
 
 def quat_mul(a, b):
@@ -69,6 +72,58 @@ def capture(shape, x, size, pitch_deg=0.0, roll_deg=0.0, lateral=0.0, seed=0):
     }
 
 
+def capture_apartment(model, x, y, yaw_deg, label, seed=0, pitch_deg=0.0):
+    """Robotul în STAND în scena apartment, la (x, y) cu direcția yaw. Pentru golul scării."""
+    names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_KEY, i) for i in range(model.nkey)]
+    d = mujoco.MjData(model)
+    d.qpos[:] = model.key_qpos[names.index("STAND")]
+    d.qpos[0], d.qpos[1] = x, y
+    a, p = np.radians(yaw_deg) / 2, np.radians(pitch_deg) / 2
+    d.qpos[3:7] = quat_mul([np.cos(a), 0, 0, np.sin(a)], [np.cos(p), 0, np.sin(p), 0])
+    mujoco.mj_forward(model, d)
+    site = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "tof")
+    trunk = 1
+    Rt = d.xmat[trunk].reshape(3, 3)
+    R_ts = Rt.T @ d.site_xmat[site].reshape(3, 3)
+    quat = np.zeros(4)
+    mujoco.mju_mat2Quat(quat, R_ts.flatten())
+    t = Tof(model, site, seed=seed)
+    dist, status = t.frame(d)
+    return {
+        "label": label, "x": x, "y": y, "yaw_deg": yaw_deg, "pitch_deg": pitch_deg, "seed": seed,
+        "pose": {"sensor_pos": (Rt.T @ (d.site_xpos[site] - d.xpos[trunk])).tolist(), "sensor_quat": quat.tolist(),
+                 "gravity": (Rt.T @ np.array([0.0, 0.0, -1.0])).tolist(), "trunk_z": float(d.xpos[trunk][2])},
+        "distance_mm": [int(v) for v in dist], "status": [int(v) for v in status],
+    }
+
+
+def main_drop():
+    """Gaura scării din apartment: x în [-0.40, 0.00], y în [-1.40, -0.70]; prima treaptă la -10 cm."""
+    model = mujoco.MjModel.from_xml_path(str(D / "scene_apartment.xml"))
+    out = []
+    # apropieri: d = distanța de la originea trunchiului la marginea găurii
+    for dd in (1.4, 1.2, 1.0, 0.85, 0.75, 0.6, 0.45, 0.3, 0.2):
+        for pitch in (0.0, 3.0, -3.0):
+            out.append(capture_apartment(model, -0.2, -0.7 + dd, -90, f"nord d={dd}", pitch_deg=pitch))
+    for dd in (0.6, 0.5, 0.4, 0.3, 0.2):
+        out.append(capture_apartment(model, -0.4 - dd, -1.05, 0, f"vest d={dd}"))
+    for dd in (0.35, 0.3, 0.2):
+        out.append(capture_apartment(model, 0.0 + dd, -1.05, 180, f"est d={dd}"))
+    # din sud: aici treapta de jos e la 40 cm sub podea, iar razele lovesc treptele (distanță mai lungă)
+    for dd in (1.2, 0.9, 0.6, 0.4, 0.2):
+        out.append(capture_apartment(model, -0.2, -1.4 - dd, 90, f"sud d={dd}"))
+    # trecere pe lângă gaură, spre sud, la 20 cm la est de margine
+    for y in (0.0, -0.3, -0.6, -0.9, -1.2):
+        out.append(capture_apartment(model, 0.2, y, -90, f"pe langa x=0.2 y={y}"))
+    # podea obișnuită din apartament (camere, covoare, mobilă, pereți): nu trebuie să dea gol
+    for (x, y) in ((-2.5, -1.0), (-2.5, 1.8), (2.2, 1.5), (2.2, 0.0), (2.2, -2.0), (-0.2, 1.5), (-1.5, -2.0), (-0.6, 2.2)):
+        for yaw in (0, 90, 180, 270):
+            for seed in (0, 1):
+                out.append(capture_apartment(model, x, y, yaw, f"camera ({x},{y}) yaw={yaw}", seed=seed))
+    OUT_DROP.write_text(json.dumps(out, separators=(",", ":")))
+    print(f"{len(out)} cadre -> {OUT_DROP} ({OUT_DROP.stat().st_size // 1024} KiB)")
+
+
 def main():
     out = []
     for seed in range(12):
@@ -88,4 +143,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--drop" in sys.argv:
+        main_drop()
+    else:
+        main()

@@ -20,6 +20,7 @@ slow_distance = 0.70      # între slow_distance și stop_distance virează din 
 steer_yaw_max = 0.8       # rotirea cerută (rad/s) a virajului din mers, la apropierea maximă (la stop_distance)
 steer_slew = 3.0          # cât de repede poate varia rotirea cerută (rad/s per s): fără smucituri
 low_obstacles = "avoid"   # "avoid" = ocolește cuburile/mingile din rândurile de jos; "ignore" = le ignoră (ca în v1)
+drops = "avoid"           # "avoid" = se ferește de goluri (margini, scări în jos); "ignore" = nu le caută
 clear_distance = 0.40     # trebuie să vadă cel puțin atât liber ca să termine întoarcerea
 first_row = 0             # rândurile folosite din cadrul 8x8 (0 = sus). Cele de jos pot vedea podeaua.
 last_row = 4
@@ -49,6 +50,16 @@ confirm_time = 0.12               # un obiect trebuie văzut continuu atâta tim
 corridor_half_width = 0.15        # un obiect la mai puțin de atât lateral de axa robotului e „în drum" (m)
 memory_seconds = 12.0             # cât ține minte un obiect după ce iese din câmpul senzorului (0 = deloc)
 extra_clearance = 0.15            # un obiect jos se tratează ca fiind cu atâta mai aproape (m): se vede doar scurt, reacția trebuie să fie fermă
+
+[drop]
+# Goluri: unde podeaua ar trebui să se vadă sigur, „nimic în rază" sau o distanță clar mai lungă = podeaua lipsește.
+max_expected = 1.2        # doar zonele cu podeaua așteptată mai aproape de atât (m): rândurile 6-7 în picioare
+range_margin = 0.10       # cât de mai lungă decât podeaua (cu capul ridicat la limita toleranței) trebuie să fie citirea
+min_zones = 2             # câte zone fără podea în același cadru (una singură = zgomot)
+confirm_time = 0.12       # văzut continuu atâta timp ca să conteze
+clearance = 0.45          # golul se tratează ca fiind cu atâta mai aproape (m): oprește cu mult înainte de margine
+corridor_half_width = 0.18
+memory_seconds = 120.0    # cât ține minte un gol (o gaură nu pleacă nicăieri)
 
 [corner]
 turns_before_big_turn = 3 # tot atâtea ocoliri la rând fără să înainteze => întoarcere mare

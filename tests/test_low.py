@@ -20,6 +20,7 @@ import pytest
 from microduck_brain.brain import Brain, Inputs
 from microduck_brain.config import Config, from_dict
 from microduck_brain.depth import DepthFrame, Pose, floor_model, low_obstacles
+from microduck_brain.hazards import LOW
 
 from .lowgeo import SENSOR_X, pose_for, render
 from .test_brain import clear
@@ -324,13 +325,13 @@ def test_memory_cleared_after_a_fall():
     while t < 3.0:
         b.tick(Inputs(t, obstacle, True, "", 0.0, pose_for(), (0.0, 0.0)))
         t += 0.05
-    assert b._memory
+    assert b.hazards.remembered(LOW)
     b.tick(Inputs(t, obstacle, False, "căzut", 0.0, pose_for(), (0.0, 0.0)))
-    assert b.state_name == "hold" and b._memory == [] and b.low_items == []
+    assert b.state_name == "hold" and b.hazards.remembered(LOW) == 0 and b.low_items == []
     for _ in range(40):                              # cât e căzut nu se adună nimic nou
         t += 0.05
         b.tick(Inputs(t, obstacle, False, "căzut", 0.0, pose_for(), (0.0, 0.0)))
-    assert b._memory == []
+    assert b.hazards.remembered(LOW) == 0
 
 
 def test_no_memory_without_position_but_visible_objects_still_count():
@@ -339,7 +340,7 @@ def test_no_memory_without_position_but_visible_objects_still_count():
     while t < 1.0:
         b.tick(Inputs(t, render(("cube", 0.65, 0.07)), True, "", 0.0, pose_for(), None))
         t += 0.05
-    assert b.low_items and b._memory == []
+    assert b.low_items and b.hazards.remembered(LOW) == 0
 
 
 def test_memory_can_be_switched_off():
