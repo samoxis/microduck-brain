@@ -119,6 +119,13 @@ Sockets are found automatically (the simulator's under `~/.cache/duck-sim/`, els
 `/run/`); `--robot-socket` / `--tof-socket` override them. Every parameter is documented in
 [`brain.toml`](brain.toml); unknown keys are rejected.
 
+A complete, recorded run in the full simulator (starts it headless in the apartment if needed, checks
+the duck stands and the world runs at real time, runs the brain, replays and plots; output in `runs/`):
+
+```bash
+bash tools/full_sim_run.sh                # 300 s; SECONDS_TO_RUN=600 for longer
+```
+
 The kinematic apartment runs and the simulator fixtures are regenerated with `microduck_rl`'s venv:
 
 ```bash
