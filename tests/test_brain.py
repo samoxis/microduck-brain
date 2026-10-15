@@ -341,3 +341,42 @@ def test_speed_comes_from_config():
     s = Sim(from_dict({"motion": {"forward_speed": 0.2}}))
     s.up()
     assert s.run(0.2).vx == pytest.approx(0.2)
+
+
+# --- the body's corridor and side memory (found by the kinematic MuJoCo runs) -----
+def right_edge(d):
+    """A post seen only in the rightmost column (7), d metres away."""
+    return frame(lambda r, c: d if (c == 7 and r <= 4) else FAR)
+
+
+def test_a_post_seen_only_in_the_rightmost_column_still_blocks():
+    # col 7 at 0.26 m: 6.5 cm right of the axis, inside the body's corridor; the old column-based
+    # "ahead" (columns 1-6) ignored it and the right leg brushed past such posts
+    s = Sim()
+    s.up()
+    s.run(0.2, right_edge(0.26))
+    assert s.brain.state_name in ("brake", "turn")
+
+
+def test_a_post_well_to_the_side_does_not_block():
+    s = Sim()
+    s.up()
+    s.run(1.0, frame(lambda r, c: 0.5 if (c == 7 and r <= 4) else FAR))   # 15 cm right at 0.5 m: outside
+    assert s.brain.state_name == "forward" and s.brain.stats.brakes == 0
+
+
+@pytest.mark.parametrize("side_memory,blocked", [(3.0, True), (0.0, False)])
+def test_side_memory_keeps_a_post_that_left_the_field_of_view(side_memory, blocked):
+    from microduck_brain.brain import Inputs
+
+    b = Brain(from_dict({"obstacle": {"side_memory_seconds": side_memory}}))
+    t = 0.0
+    while t < 2.0:                                                # hold -> forward
+        b.tick(Inputs(t, clear(), True, "", 0.0, None, (0.0, 0.0)))
+        t += 0.05
+    b.tick(Inputs(t, right_edge(0.42), True, "", 0.0, None, (0.0, 0.0)))   # seen: 0.40 ahead, 12 cm right
+    t += 0.05
+    gone = clear()                                                # now beside the body: out of view
+    b.tick(Inputs(t, gone, True, "", 0.0, None, (0.22, 0.0)))
+    view = b.look(Inputs(t, gone, True, "", 0.0, None, (0.22, 0.0)))
+    assert view.blocked is blocked

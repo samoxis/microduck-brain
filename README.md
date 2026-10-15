@@ -1,222 +1,146 @@
 # microduck-brain
 
-Creier autonom **v0** pentru Microduck: un program separat, client al robotului, care vorbește cu el
-exact ca `robotctl` (JSON-RPC 2.0, un obiect pe linie, pe socket-uri unix). Nu modifică și nu
-depinde de repository-urile Pollen. Python 3.12, `uv`, **zero dependențe** în afară de biblioteca
-standard.
+[![tests](https://github.com/samoxis/microduck-brain/actions/workflows/tests.yml/badge.svg)](https://github.com/samoxis/microduck-brain/actions/workflows/tests.yml)
 
-Ce face:
+An autonomy layer for **Microduck**, the 25 cm open-source biped from Pollen Robotics / Hugging Face.
+It runs as a separate client and talks to the robot only through its public JSON-RPC API over unix
+sockets — the same calls `robotctl` makes — so it needs no changes to the robot's software.
+Python 3.12, standard library only.
 
-1. merge înainte (`robot.move`, 20 Hz) și **ține direcția** cu `odom.yaw` (corectează deriva);
-2. citește cadrele de adâncime 8×8; când un obstacol se apropie, **virează din mers** spre partea mai
-   liberă, mai tare cu cât e mai aproape; se oprește de tot și se rotește pe loc doar când nu mai are
-   loc (sub `stop_distance`);
-3. **vede obiecte joase** (cuburi, mingi) în rândurile de jos ale cadrului și le ocolește; comutator
-   `low_obstacles = "avoid" | "ignore"` (vezi mai jos, inclusiv limita geometrică);
-4. **se ferește de goluri** (margini, scări în jos, ca scara din coridorul apartamentului) și le ține
-   minte; comutator `drops = "avoid" | "ignore"`;
-5. dacă ajunge de mai multe ori la frână fără să apuce să meargă înainte (colț), face o întoarcere
-   mare; **rotirile se măsoară din `odom.yaw`**, nu din timp;
-6. dacă robotul raportează că a căzut sau că nu e sănătos, **nu mai trimite comenzi de mers** până e
-   din nou în picioare (și mai așteaptă `resume_delay`);
-7. la Ctrl+C (sau SIGTERM) trimite `robot.stop` și iese curat, cu un rezumat.
+What the robot does with it:
 
-## Pornire pe PC (WSL Ubuntu)
+- **walks and holds its heading**, cancelling the gait's drift with `odom.yaw` (a small PI loop);
+- **steers around obstacles while walking**, and stops to turn in place only when there is no room;
+- **avoids low objects** (7 cm cubes, 8 cm balls) that are only visible in the bottom rows of its
+  8×8 depth sensor, using a geometric model of the floor;
+- **keeps away from drops** (ledges, stairs going down);
+- **remembers hazards it can no longer see**, in odometry coordinates;
+- **stops sending walking commands when it falls or is unhealthy**, and resumes once it is upright;
+- **records every decision** for exact offline replay and plots.
 
-Presupun repository-urile în `~/microduck` și `~/microduck_rl`, iar acest repository în
-`~/microduck-brain`.
+![A 300 s run in the MuJoCo apartment](docs/apartment-run.svg)
+
+*A 300 s closed-loop run in the MuJoCo apartment scene (kinematic body, see below): the path
+coloured by state, a rough map built from wall returns, the stairwell it kept away from (black), and
+the low objects it went around (green). The recording is in [`docs/`](docs/) and replays exactly:
+`uv run microduck-brain-replay docs/apartment-run.jsonl.gz`.*
+
+## Results
+
+| Where | What was measured | Result |
+|---|---|---|
+| Full simulator, official walking policies (run by the author) | v1 (before low objects and drops), 150 s in the apartment | 85 avoidances, only 4 needing a full stop; **0 falls**; area covered 4.5 × 3.4 m |
+| Full simulator (run by the author) | Minimum commanded speeds at which the policy steps | 0.20 m/s forward, 1.1 rad/s turning; real speed ≈ 40% (forward) and 46–69% (turning) of commanded |
+| MuJoCo apartment, kinematic body, real ToF model ([`tools/kinematic_apartment.py`](tools/kinematic_apartment.py)) | 12 runs × 300 s from 6 rooms, two real turn rates: 334 m walked | **0 toy contacts, 0 entries over the stairwell**, 2 grazes of furniture (down from 22, see *Findings*), 791 avoidances |
+| Real MuJoCo sensor frames ([`tests/fixtures/`](tests/fixtures/)) | Floor model vs. the simulated sensor | error σ 0.8% (max 2.8%) |
+| Real MuJoCo sensor frames | False alarms on empty floor, trunk tilted ±3° pitch and roll | **0** in 96 frames (low objects) and 0 in 304 frames (drops, incl. 64 frames across the apartment's rooms) |
+| Test suite | 164 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
+
+**What has not been verified**: anything on a physical robot (the author doesn't have one yet), and
+the newest behaviour (low objects, drops, side memory) under the real walking dynamics, which needs the
+full simulator — it is the next thing the author will run.
+
+## Findings worth knowing
+
+These came out of measuring rather than assuming, and each one changed the design:
+
+1. **The policy has a dead zone.** Below 0.20 m/s forward or 1.1 rad/s turning the walking policy
+   doesn't step at all; the first version (0.10 m/s) just stood still. The thresholds now live in the
+   code and the brain warns at startup if the config is below them.
+2. **Turns must be measured, not timed.** The robot turns at roughly half the commanded rate, so a
+   timed 160° turn came out around 80°. Turns now close the loop on `odom.yaw`.
+3. **A 7 cm cube is invisible within ~45 cm.** Standing, the sensor is 24.6 cm high and level; its
+   lowest beam dips 19.7°. A cube closer than ~45 cm is *under* every beam — the frame is identical to
+   an empty floor (verified on simulator frames). Detection works at 0.45–0.7 m, so the brain
+   remembers what it saw and steers around it after it disappears.
+4. **The stairwell is visible only through a window.** Approaching the 40 cm-wide side of the
+   stairwell, its far floor is already beyond the lowest beam's landing point at ~0.3 m, so the hole
+   vanishes from view; drops are remembered for 120 s. (In the simulator a beam into the hole returns
+   "nothing in range" because it passes under the floor slab; a real sensor would see the step as a
+   longer range — both count.)
+5. **The foot of every wall looks like a low object.** The first closed-loop run reported 178 "low
+   objects" in an apartment with 7 toys: 99.97% were wall bases seen by the bottom rows. A bottom-row
+   reading now counts only if the wall rows above it are clear.
+6. **The right leg brushed furniture.** In 12 runs, 22 contacts, *all* on the right side while
+   walking straight: the sensor sits 2.2 cm left of the axis and "ahead" was defined as columns 1–6,
+   so a post passing beside the right leg was never "ahead". "Ahead" is now the body's geometric
+   corridor, and wall returns near the body are remembered for 3 s. Contacts dropped to 2, with the
+   same area covered. The remaining two are the beak grazing a stool that was 54° to the right —
+   outside the 45° field of view — while the robot arced away from something on its left; a longer
+   memory didn't remove them, a wider view would (turning the head, or the camera).
+
+## How it works
+
+```mermaid
+flowchart LR
+    tofd["tofd<br/>tof.stream<br/>8×8 depth, 15 Hz"] --> runner
+    robotd["robotd<br/>robot.subscribe<br/>odom, pose, fall flags"] --> runner
+    runner["runner.py<br/>pairs each frame with the<br/>pose at the same t_ns"] --> brain
+    subgraph brain["Brain.tick (pure function of its inputs)"]
+        depth["depth.py<br/>walls in the body corridor<br/>floor model per zone"]
+        hazards["hazards.py<br/>low objects, drops, sides<br/>+ memory in odom frame"]
+        states["state machine<br/>hold, forward, brake,<br/>turn, bigturn"]
+        depth --> states
+        hazards --> states
+    end
+    brain -->|"robot.move 20 Hz<br/>robot.stop"| robotd
+    runner -.->|"--record"| rec[("run.jsonl.gz<br/>replay, plot")]
+```
+
+- **`depth.py`** turns a frame into a view ahead. For the bottom rows it computes, per zone, the
+  range an empty floor would read, from the sensor's pose in `robot.state` (`frames.tof`,
+  `safety.gravity`, `odom.position[2]`) — the same inputs the robot's own floor filter uses. Shorter
+  means an object, longer (or nothing) means a drop.
+- **`hazards.py`** confirms detections over time and remembers them in odometry coordinates.
+- **`brain.py`** is the state machine. A safety guard sits above every state: fallen, unhealthy or
+  blind means `hold`. New behaviours (dance, rest, play) are states registered with `brain.register()`.
+- **`runner.py` / `ipc.py`** speak NDJSON JSON-RPC 2.0 to `robotd` and `tofd`, with the formats
+  taken from `duck-ipc-proto` and `robotctl` rather than guessed.
+- **`record.py`** writes every tick; because the brain is a pure function of its inputs, a recording
+  replays exactly, and can be replayed with a different config to see what a change would have done.
+
+## Quick start
+
+On Linux or WSL, with Pollen's [`microduck`](https://github.com/pollen-robotics/microduck) and
+[`microduck_rl`](https://github.com/pollen-robotics/microduck_rl) checked out and the simulator running:
 
 ```bash
-# o singură dată: uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/install.sh | sh        # once
+git clone https://github.com/samoxis/microduck-brain && cd microduck-brain
 
-# terminalul 1: simularea (scena apartment, fără fereastră — vezi nota de mai jos)
-DUCK_SIM_SCENE=apartment DUCK_SIM_VIEWER=0 bash ~/microduck_sim_up.sh
-
-# terminalul 2: creierul
-cd ~/microduck-brain
-uv run microduck-brain --config brain.toml
+uv run microduck-brain                                  # Ctrl+C sends robot.stop and exits cleanly
+uv run microduck-brain --duration 180 --record run.jsonl.gz
+uv run microduck-brain-replay run.jsonl.gz              # must report 0 differing commands
+uv run microduck-brain-plot run.jsonl.gz -o run.svg
+uv run pytest                                           # the test suite
 ```
 
-Oprești cu **Ctrl+C**. Pentru o rulare limitată: `uv run microduck-brain --duration 180`.
+Sockets are found automatically (the simulator's under `~/.cache/duck-sim/`, else the robot's under
+`/run/`); `--robot-socket` / `--tof-socket` override them. Every parameter is documented in
+[`brain.toml`](brain.toml); unknown keys are rejected.
 
-Teste: `uv run pytest`.
+The kinematic apartment runs and the simulator fixtures are regenerated with `microduck_rl`'s venv:
 
-**Socket-urile** se găsesc singure: dacă există `~/.cache/duck-sim/duck-a.sock` și
-`duck-a-tof.sock` (locul unde le pune `scripts/duck-sim`), le folosește pe acelea; altfel
-`/run/robotd.sock` și `/run/tofd/tof.sock` (robotul real). Dacă scriptul tău de pornire folosește alt
-director, setează `DUCK_SIM_STATE=/calea/mea`, sau dă căile direct:
-`--robot-socket ... --tof-socket ...` (sau în `[sockets]` din config).
-
-> Nu știu ce face `~/microduck_sim_up.sh` — nu l-am văzut. Dacă el nu respectă variabilele
-> `DUCK_SIM_*` ale lui `scripts/duck-sim`, pornește simularea cum o pornești de obicei și
-> folosește `--robot-socket` / `--tof-socket`.
-
-## Parametri (`brain.toml`)
-
-Toate valorile din fișier sunt cele implicite; poți șterge orice linie. O cheie scrisă greșit dă
-eroare la pornire, nu e ignorată în tăcere. Distanțe în metri, viteze în m/s sau rad/s, timpuri în
-secunde.
-
-### `[sockets]`
-| Cheie | Ce face |
-|---|---|
-| `robot` | socket-ul lui `robotd`. Gol = se ghicește (vezi mai sus). |
-| `tof` | socket-ul lui `tofd` (adâncimea). Gol = se ghicește. |
-
-### `[motion]`
-Vitezele sunt cele **cerute**; cele reale ies mai mici (măsurat: 0,24 cerut ≈ 0,10 m/s real).
-Praguri măsurate în simulare, scrise în cod (`MIN_FORWARD_SPEED = 0,20 m/s`, `MIN_TURN_SPEED = 1,1 rad/s`):
-sub ele politica nu pășește deloc. Dacă configurația cere mai puțin, la pornire apare un avertisment
-`ATENȚIE` pe fiecare cheie în parte (creierul pornește oricum).
-
-| Cheie | Ce face |
-|---|---|
-| `forward_speed` | viteza de mers înainte cerută (m/s). Minim 0,20. |
-| `turn_speed` | cât de repede se rotește în loc când nu mai are loc (rad/s; pozitiv = stânga). Minim 1,1. |
-| `big_turn_speed` | cât de repede se rotește la întoarcerea mare. Minim 1,1. |
-
-### `[obstacle]`
-| Cheie | Ce face |
-|---|---|
-| `stop_distance` | un obstacol mai aproape de atât în față (nu mai are loc) => se oprește de tot și se rotește pe loc. |
-| `slow_distance` | între `slow_distance` și `stop_distance` virează din mers (fără să se oprească), cu atât mai tare cu cât obstacolul e mai aproape. Direcția se alege la începutul ocolirii (partea mai liberă) și nu se schimbă cât durează. |
-| `steer_yaw_max` | rotirea cerută (rad/s) a virajului din mers, când obstacolul e la `stop_distance`. Nu are prag minim cunoscut: când mergi și virezi simultan, dacă robotul nu pare să vireze, ridic-o. |
-| `steer_slew` | cât de repede poate varia rotirea cerută (rad/s pe secundă): fără smucituri. |
-| `clear_distance` | ca să termine întoarcerea trebuie să vadă liber cel puțin atât (mai mare decât `stop_distance`, ca să nu oscileze). |
-| `first_row`, `last_row` | rândurile 8×8 folosite ca „pereți" (0 = sus). Rândurile de după `last_row` (implicit 5–7) văd și podeaua și sunt tratate separat, ca obiecte joase (vezi `low_obstacles`). |
-| `low_obstacles` | `"avoid"` (implicit): obiectele joase din rândurile de jos sunt obstacole și sunt ocolite. `"ignore"`: rândurile de jos sunt ignorate, ca în v1 (robotul le împinge). Se schimbă doar în fișier; când vei vrea să se joace cu ele, aici se va adăuga o a treia valoare. |
-| `front_first_col`, `front_last_col` | coloanele care contează „în față” (0 = stânga). Implicit 1–6: marginile (0 și 7) nu opresc robotul. |
-| `min_zones` | câte zone trebuie să fie aproape ca să conteze ca obstacol. 2 taie zgomotul de o singură zonă. |
-| `blind_fraction` | dacă sub atâta din zonele din față dau o măsurătoare validă (senzor orb, perete lipit de el), se tratează ca obstacol. |
-| `max_range` | „nimic în rază” (status 255) se socotește la această distanță. |
-| `stop_pause` | cât stă pe loc după oprire, înainte să înceapă să se întoarcă. |
-| `min_turn_time`, `min_turn_degrees` | rotirea în loc durează cel puțin atât și parcurge cel puțin atâtea grade **măsurate**. |
-| `max_turn_time` | dacă rotirea în loc nu se eliberează în atâta timp, renunță și face întoarcerea mare. |
-| `default_turn` | `left` sau `right`: direcția când ambele părți sunt la fel de libere. |
-
-### `[low]` — obiecte joase
-**Cum funcționează.** În rândurile de jos senzorul vede și podeaua. Pentru fiecare zonă se calculează
-distanța pe care ar măsura-o pe podea goală: `înălțimea senzorului / cât de mult privește raza în jos`.
-Înălțimea și „în jos" vin din `robot.state` (`frames.tof`, `safety.gravity`, `odom.position[2]`),
-asociate cadrului după `t_ns`, deci înclinarea capului și a trunchiului la fiecare pas e compensată
-exact. O citire vizibil mai scurtă decât podeaua (cu marjă) e un obiect.
-
-**De ce geometrie, nu autocalibrare.** Înclinarea se schimbă la fiecare pas, deci o calibrare fixă ar
-fi greșită, iar una care o urmărește e tot geometrie; iar „podea liberă" nu poate fi recunoscută dinainte
-fără să știi deja ce e podea (un perete lung ar fi învățat ca podea). Aceeași geometrie o folosește
-filtrul de podea al lui `robotd`. Măsurat pe senzorul simulat: modelul se potrivește cu abatere
-standard 0,8% (maxim 2,8%).
-
-**Limita geometrică, de știut.** În picioare, cu capul drept, senzorul e la 24,6 cm și raza cea mai de
-jos coboară 19,7°. Un cub de 7 cm se vede doar de la ~45 cm de trunchi, în 1–2 zone, cu citirea la
-70–85% din distanța podelei; o minge de 8 cm la fel, dar la 0,6–0,7 m poate cădea între raze. Mai
-aproape de ~45 cm obiectul e **sub cea mai de jos rază** și cadrul e identic cu o podea goală (verificat
-pe cadre MuJoCo). De aceea creierul **ține minte** obiectul văzut, în coordonate odom, și îl
-ocolește și după ce a ieșit din câmp (`memory_seconds`). Un obiect care n-a fost văzut niciodată de la
-distanță (apărut sub nivelul razelor) nu poate fi detectat.
-
-| Cheie | Ce face |
-|---|---|
-| `nominal_height`, `nominal_pitch_deg`, `nominal_sensor_forward` | geometria presupusă dacă robotul nu trimite poza (măsurat în MuJoCo, STAND). Înălțimea senzorului, înclinarea lui în jos, cât de în față de originea trunchiului e. |
-| `tilt_tolerance_deg` | eroare de poză acceptată cu poză (sincronizare, legănat): podeaua se socotește cu senzorul înclinat cu atât mai mult în jos. |
-| `tilt_tolerance_nopose_deg` | la fel, fără poză; trebuie să acopere ±3° pitch plus ±3° roll odată (4,5). Prinde mai puține obiecte. |
-| `range_margin` | marjă relativă sub podea (zgomotul senzorului ≈ 0,8%, eroarea de înălțime). |
-| `min_range` | citirile mai aproape de atât (înainte) sunt zgomot de apropiere și sunt ignorate. |
-| `confirm_time` | un obiect trebuie văzut continuu atâta timp (≈ 2 cadre la 15 Hz) ca să conteze; un singur cadru zgomotos nu virează robotul. |
-| `corridor_half_width` | un obiect la mai puțin de atât lateral de axa robotului e „în drum". |
-| `memory_seconds` | cât ține minte un obiect după ce iese din câmp. 0 = fără memorie. Se șterge la cădere. |
-| `extra_clearance` | obiectul jos se tratează ca fiind cu atâta mai aproape; obiectul se vede doar scurt, deci reacția trebuie să fie fermă. 0,15 dă ~5 cm spațiu în teste, fără frână; la 0 abia scapă; la 0,30 începe să frâneze degeaba. |
-
-### `[drop]` — goluri
-Unde podeaua ar trebui să se vadă sigur (rândurile 6–7, podeaua la 0,7–1,0 m), o zonă care vede
-„nimic în rază" sau o distanță clar mai lungă decât podeaua înseamnă că podeaua lipsește. În
-simulator, razele care intră în gaura scării trec pe sub placa de podea și întorc „nimic"; un senzor
-real ar vedea treptele, deci o distanță mai lungă (acest caz apare în simulare dinspre sud). Golul
-confirmat oprește robotul cu `clearance` înainte și e ținut minte `memory_seconds`: o gaură îngustă se
-vede doar pe o fereastră (din vest, la 0,4–0,6 m), apoi razele aterizează pe podeaua de dincolo.
-Verificat pe 109 cadre MuJoCo din apartment (inclusiv 64 din camere, fără nicio alarmă falsă).
-
-| Cheie | Ce face |
-|---|---|
-| `max_expected` | se folosesc doar zonele cu podeaua așteptată mai aproape de atât; mai departe, un senzor real ratează des podeaua și ar da alarme false. |
-| `range_margin` | cât de mai lungă decât cea mai îndepărtată podea plauzibilă trebuie să fie citirea. |
-| `min_zones`, `confirm_time` | câte zone și cât timp, ca o zonă ratată să nu oprească robotul. |
-| `clearance` | golul se tratează ca fiind cu atâta mai aproape: robotul oprește mult înainte de margine. |
-| `corridor_half_width` | lățimea (pe jumătate) a culoarului în care un gol contează. |
-| `memory_seconds` | cât ține minte un gol. Se uită la cădere. |
-
-### `[corner]`
-| Cheie | Ce face |
-|---|---|
-| `turns_before_big_turn` | atâtea opriri complete (frână + rotire pe loc) la rând, fără progres între ele => întoarcere mare. Un viraj din mers reușit nu se numără. |
-| `progress_time` | cât trebuie să meargă înainte cu drumul liber (peste `slow_distance`), continuu, ca numărătoarea să revină la zero. |
-| `big_turn_degrees` | unghiul întoarcerii mari, **măsurat din `odom.yaw`** (nu cronometrat): rotește până atinge unghiul, oricât de mică e rata reală. Nu mai e nevoie de corecția la 280. |
-| `big_turn_max_time` | siguranță: dacă unghiul nu e atins în atâta timp (odometrie blocată sau semn greșit), renunță și numără ca expirare. |
-| `fallback_turn_efficiency` | doar dacă robotul nu raportează `odom.yaw`: cronometrează presupunând că se rotește real atâta din rata cerută (0,5 măsurat de tine ≈ 0,46–0,7). |
-
-### `[heading]`
-Cât merge drept, un regulator PI mic corectează `vyaw` ca `odom.yaw` să rămână la direcția țintă.
-Direcția țintă se reia din direcția curentă de fiecare dată când drumul se eliberează după o ocolire.
-
-| Cheie | Ce face |
-|---|---|
-| `enabled` | pornește/oprește menținerea direcției. |
-| `kp`, `ki` | câștigurile (rad/s corecție per rad eroare; per rad·s). `ki` compensează deriva constantă. |
-| `max_correction` | corecția maximă adăugată (rad/s). |
-| `yaw_sign` | `1` dacă `odom.yaw` crește spre stânga (ca `vyaw`, cum scrie protocolul); `-1` dacă l-ai găsit invers. Dacă pare greșit, întoarcerea mare expiră la `big_turn_max_time`. |
-
-### `[safety]`
-| Cheie | Ce face |
-|---|---|
-| `tof_timeout` | un cadru de adâncime mai vechi de atât => robotul e oprit (nu merge orb). |
-| `state_timeout` | dacă fluxul `robot.state` tace atât, robotul e considerat nesigur. |
-| `health_poll` | cât de des întreabă `robot.health`. |
-| `resume_delay` | după ce robotul e iar sigur (în picioare, sănătos, cu adâncime), mai așteaptă atât, continuu, înainte să meargă. |
-
-### `[loop]`
-| Cheie | Ce face |
-|---|---|
-| `rate_hz` | cât de des trimite `robot.move`. Robotul oprește singur mersul dacă nu primește comenzi ~0,5 s (deadman), deci nu coborî sub ~5 Hz. |
-| `log_every` | la câte secunde scrie o linie de stare (0 = deloc). |
-
-## Cum e făcut
-
-```
-src/microduck_brain/
-  config.py   configurația (dataclass-uri + TOML, chei necunoscute respinse)
-  depth.py    cadru 8×8 -> „blocat?”, „care parte e mai liberă?”, podeaua așteptată, obiecte joase, goluri
-  hazards.py  obiectele joase și golurile: confirmare în timp + memorie în coordonate odom
-  brain.py    mașina de stări; logică pură, fără socket-uri și fără ceas propriu
-  ipc.py      JSON-RPC pe socket unix (cereri, notificări, fluxuri abonate)
-  runner.py   buclă: citește senzorii, apelează Brain.tick, trimite comenzi
-  cli.py      linia de comandă
+```bash
+cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/kinematic_apartment.py --seconds 300 --svg run.svg
+cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py [--drop]
 ```
 
-Stări: `hold → forward → brake → turn → forward`, cu `bigturn` pentru colțuri. Virajul din mers și
-menținerea direcției sunt în `forward`. Un „gardian” din `Brain.tick` stă deasupra tuturor stărilor:
-căzut / nesănătos / fără adâncime => `hold`.
+## Limitations
 
-**Stare nouă** (dans, odihnă): o clasă cu `name` și `step(brain, inputs) -> (Command, next | None)`,
-înregistrată cu `brain.register(...)`. Dacă nu are nevoie de adâncime, `needs_depth = False`.
-Detalii în docstring-ul din `brain.py`.
+- Not yet run on a physical robot. The kinematic runs move the body ideally (no balance, no slip)
+  with perfect odometry; the real gait sways more and the odometry drifts.
+- An object that was never seen from a distance (already under the lowest beam) cannot be detected;
+  nor can a drop narrower than the blind zone ahead (~0.7 m) approached from the side without having
+  been seen. Glass is invisible to the sensor.
+- After a fall the brain waits; it does not try to stand the robot up.
+- The 45° field of view is narrow while turning (finding 6).
 
-## Fixture-uri MuJoCo
+## How this was built
 
-`tests/fixtures/mujoco_low.json` conține cadre reale din senzorul simulat (podea goală cu trunchiul
-înclinat, cuburi și mingi la distanțe diferite), cu poza raportată. Se regenerează cu venv-ul lui
-`microduck_rl`: `cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py`.
-
-## Limite cunoscute
-
-* Dacă robotul a căzut, creierul **doar așteaptă**; nu încearcă să-l ridice.
-* Regulatorul de direcție și virajul din mers au valori inițiale **neacordate pe mers real**
-  (`kp`, `ki`, `steer_yaw_max`, `slow_distance`); testele le verifică doar pe un model simplu.
-* Dacă politica ignoră comenzi mici de rotire cât merge, corecția de direcție poate fi înghițită.
-* Nu vede obiecte jos care apar sub cea mai de jos rază fără să fi fost văzute de la distanță (vezi `[low]`).
-* Un gol mai îngust decât zona oarbă din fața robotului (~0,7 m), apropiat din lateral fără să fi fost
-  văzut înainte, nu poate fi detectat (din est, gaura scării nu se vede deloc). Nu vede sticla.
-* Obiectele joase văzute doar de la mare distanță pot fi ratate între raze (mingea de 8 cm la ~0,7 m).
-* Memoria folosește `odom.position` (x, y); se presupune că `odom.yaw` crește spre stânga, ca în v1.
-* Orientarea senzorului (coloana 0 = stânga) e luată din simulator și din `tofd`; pe robotul real
-  merită verificată.
+The author defined the goals, ran the full simulator with Pollen's walking policies, measured the
+thresholds and failure modes (the dead zone, the turn rate, the drift, the pushed cubes), and decided
+the direction at each version. The implementation, the simulator tooling and the tests were written
+with [Claude Code](https://claude.com/claude-code), Anthropic's agentic coding tool, which is why most
+commits are co-authored. Every behaviour was checked against measurements before being kept, and the
+README reports what was not verified as plainly as what was.

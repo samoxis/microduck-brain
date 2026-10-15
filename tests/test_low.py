@@ -245,14 +245,15 @@ def test_avoid_clears_objects_slightly_off_axis(shape, size, lateral):
 
 
 def test_extra_clearance_makes_the_reaction_firm_enough_for_slow_turning():
-    """Without extra_clearance and with a slow real turn rate (30% of commanded) the robot barely clears the cube."""
+    """With a slow real turn rate (30% of commanded) extra_clearance clearly widens the gap to the cube."""
     def run(extra):
         w = World(from_dict({"low": {"extra_clearance": extra}}), (1.3, 0.0), eff_w=0.3)
         w.run(Config().safety.resume_delay + 0.3)
         w.run(60.0)
         return w.min_clearance
-    assert run(0.0) < 0.01
-    assert run(0.15) > 0.03
+    without, with_ = run(0.0), run(0.15)
+    assert with_ > 0.05
+    assert with_ > without + 0.03
 
 
 def test_memory_saves_the_robot_when_it_turns_slowly_and_walks_fast():

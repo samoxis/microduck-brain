@@ -40,7 +40,7 @@ def render_svg(ticks: list[Tick], cfg: Config, run_path: str, title: str = "", s
     def Y(y: float) -> float:          # world y up, SVG y down
         return round(top + (y1 - y) * scale, 1)
 
-    height = int(top + (y1 - y0) * scale + 70)
+    height = int(top + (y1 - y0) * scale + 90)
     out = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{height}" '
         f'viewBox="0 0 {size} {height}" font-family="Helvetica, Arial, sans-serif">',
@@ -55,8 +55,8 @@ def render_svg(ticks: list[Tick], cfg: Config, run_path: str, title: str = "", s
         f'{st.low_seen} low objects · {st.drops_seen} drops · {st.holds_unsafe} falls/unsafe holds</text>'
     )
     # 1 m scale bar
-    out.append(f'<line x1="20" y1="{height - 25}" x2="{20 + scale:.1f}" y2="{height - 25}" stroke="#1d1d1d" stroke-width="2"/>')
-    out.append(f'<text x="20" y="{height - 32}" font-size="11" fill="#1d1d1d">1 m</text>')
+    out.append(f'<line x1="20" y1="{height - 50}" x2="{20 + scale:.1f}" y2="{height - 50}" stroke="#1d1d1d" stroke-width="2"/>')
+    out.append(f'<text x="{24 + scale:.1f}" y="{height - 46}" font-size="11" fill="#1d1d1d">1 m</text>')
 
     for wx, wy in walls:
         out.append(f'<circle cx="{X(wx)}" cy="{Y(wy)}" r="1.4" fill="#b9b9b9"/>')
@@ -78,7 +78,7 @@ def render_svg(ticks: list[Tick], cfg: Config, run_path: str, title: str = "", s
         out.append(f'<text x="{X(sx) + 9}" y="{Y(sy) + 4}" font-size="12" fill="#1d1d1d">start</text>')
 
     legend = [(STATE_COLOURS[k], k) for k in ("forward", "turn", "brake", "bigturn", "hold")]
-    lx = 120
+    lx = 20
     for colour, label in legend:
         out.append(f'<rect x="{lx}" y="{height - 33}" width="14" height="4" fill="{colour}"/>')
         out.append(f'<text x="{lx + 18}" y="{height - 27}" font-size="12" fill="#1d1d1d">{label}</text>')

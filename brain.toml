@@ -25,7 +25,10 @@ drops = "avoid"           # "avoid" = keep away from drops (ledges, stairs going
 clear_distance = 0.40     # a turn ends only once at least this much is clear ahead
 first_row = 0             # frame rows used for walls (0 = top). Rows below last_row also see the floor:
 last_row = 4              # they are handled separately, as low objects and drops.
-front_first_col = 1       # columns that count as "ahead" (0 = the sensor's left)
+corridor_half_width = 0.14 # "ahead" = any wall return within this of the robot's axis (m): the body's swept width + margin
+sensor_lateral = 0.0224   # the sensor sits this far left of the robot's axis (m; MJCF `tof` site)
+side_memory_seconds = 3.0 # remember wall returns near the body for this long: a chair leg leaves the field of view ~30 cm before passing the leg
+front_first_col = 1       # central columns used to decide whether the sensor is blind (0 = the sensor's left)
 front_last_col = 6
 min_zones = 2             # how many zones must be close for it to count (rejects single-zone noise)
 blind_fraction = 0.5      # if fewer than this fraction of zones return a measurement, the sensor is "blind" => obstacle
@@ -51,6 +54,7 @@ confirm_time = 0.12               # an object must be seen continuously this lon
 corridor_half_width = 0.15        # an object closer than this to the robot's axis is "in the way" (m)
 memory_seconds = 12.0             # how long an object is remembered after leaving the sensor's view (0 = never)
 extra_clearance = 0.15            # a low object is treated as this much closer (m): it is visible only briefly, so react firmly
+wall_margin = 0.25                # a low reading with a wall row in the same column closer than reading + this is a wall's foot, not an object
 
 [drop]
 # Drops: where the floor should be clearly visible, "nothing in range" or a clearly longer range = the floor is missing.

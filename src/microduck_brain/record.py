@@ -50,7 +50,7 @@ class Recorder:
 
     def write(self, inp: Inputs, cmd: Command, state: str) -> None:
         rec: dict = {
-            "t": round(inp.now, 4),
+            "t": inp.now,                  # exact: the brain compares times, rounding changes branches
             "safe": inp.safe,
             "yaw": inp.yaw,
             "pos": list(inp.pos) if inp.pos is not None else None,
@@ -160,7 +160,7 @@ def metrics(ticks: list[Tick], cell: float = 0.25) -> dict:
     }
 
 
-def wall_points(ticks: list[Tick], cfg: Config, every: int = 4) -> list[tuple[float, float]]:
+def wall_points(ticks: list[Tick], cfg: Config, every: int = 2) -> list[tuple[float, float]]:
     """Where the upper (wall) rows hit something, in the odometry frame — a rough map of the room
     for drawing. Uses the current heading and position; ignores the small head pitch."""
     pts = []

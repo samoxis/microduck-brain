@@ -1,0 +1,16 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8
+      - name: Install Python 3.12 and the dev dependencies
+        run: uv sync --python 3.12
+      - name: Run the tests
+        run: uv run pytest -q

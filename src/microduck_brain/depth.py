@@ -93,17 +93,24 @@ def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None) ->
     rows = range(cfg.first_row, cfg.last_row + 1)
     front_cols = range(cfg.front_first_col, cfg.front_last_col + 1)
 
+    # Blindness is judged on the central columns: are there enough measurements to trust the frame?
+    measured = sum(1 for r in rows for c in front_cols if frame.zone(r, c, cfg.max_range) is not None)
+    blind = measured < cfg.blind_fraction * len(rows) * len(front_cols)
+
+    # "Ahead" is geometric, not a set of columns: every wall-row return whose lateral position, relative
+    # to the robot's axis, falls within the body's swept corridor counts, at its forward distance. The
+    # sensor sits ``sensor_lateral`` to the left of the axis, so the right side needs the outer columns.
     ranges: list[float] = []
     for r in rows:
-        for c in front_cols:
+        for c in range(frame.cols):
             d = frame.zone(r, c, cfg.max_range)
-            if d is not None:
-                ranges.append(d)
+            if d is None:
+                continue
+            bx, by, _ = BEAMS[r * frame.cols + c]
+            if abs(d * by + cfg.sensor_lateral) <= cfg.corridor_half_width:
+                ranges.append(d * bx)
     ranges.sort()
     nearest = ranges[0] if ranges else None
-
-    total = len(rows) * len(front_cols)
-    blind = len(ranges) < cfg.blind_fraction * total
     k = max(1, cfg.min_zones)
     # The k-th smallest range: "obstacle" means at least k zones closer than the threshold.
     front = ranges[k - 1] if len(ranges) >= k else (cfg.max_range if ranges else None)
@@ -234,17 +241,25 @@ class LowObstacle:
 
 
 def low_obstacles(frame: DepthFrame, pose: Pose | None, cfg) -> list[LowObstacle]:
-    """Bottom-row zones that read clearly shorter than an empty floor.
+    """Bottom-row zones that read clearly shorter than an empty floor, under a clear wall row
+    (otherwise it is the foot of a wall, not a low object).
 
     ``cfg`` is the whole Config. The tilt tolerance and range margin absorb pose error (timing,
     gait sway) and sensor noise; without a pose the tolerance is wider."""
     if frame.rows != 8 or frame.cols != 8:
         return []
     lo = cfg.low
+    o = cfg.obstacle
     model = floor_model(pose, lo)
     tilt = lo.tilt_tolerance_deg if pose is not None else lo.tilt_tolerance_nopose_deg
+    # Nearest return in the wall rows of each column: a short bottom-row reading under a wall that
+    # close is just the foot of that wall, already handled by the wall rows — not a low object.
+    upper = []
+    for c in range(8):
+        vals = [d for r in range(o.first_row, o.last_row + 1) if (d := frame.zone(r, c, o.max_range)) is not None]
+        upper.append(min(vals) if vals else math.inf)
     out = []
-    for r in range(cfg.obstacle.last_row + 1, 8):
+    for r in range(o.last_row + 1, 8):
         for c in range(8):
             i = r * 8 + c
             if frame.status[i] not in STATUS_VALID or frame.distance_mm[i] <= 0:
@@ -253,6 +268,8 @@ def low_obstacles(frame: DepthFrame, pose: Pose | None, cfg) -> list[LowObstacle
             exp_near = model.expected(i, tilt)
             if d >= exp_near * (1.0 - lo.range_margin):
                 continue                                # floor (or further)
+            if upper[c] < d + lo.wall_margin:
+                continue                                # the foot of a wall the upper rows already see
             bx, by, _ = BEAMS[i]
             if d * bx < lo.min_range:
                 continue                                # under ~10 cm the sensor reports phantom returns

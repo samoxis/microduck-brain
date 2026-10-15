@@ -41,6 +41,9 @@ class Obstacle:
     steer_slew: float = 3.0
     low_obstacles: str = "avoid"
     drops: str = "avoid"
+    corridor_half_width: float = 0.14
+    sensor_lateral: float = 0.0224
+    side_memory_seconds: float = 3.0
 
 
 @dataclass
@@ -58,6 +61,7 @@ class Low:
     corridor_half_width: float = 0.15
     memory_seconds: float = 12.0
     extra_clearance: float = 0.15
+    wall_margin: float = 0.25
 
 
 @dataclass
@@ -129,6 +133,8 @@ class Config:
             raise ValueError("obstacle: slow_distance must be >= stop_distance")
         if o.steer_yaw_max < 0 or o.steer_slew <= 0 or o.min_turn_degrees < 0:
             raise ValueError("obstacle: steer_yaw_max >= 0, steer_slew > 0, min_turn_degrees >= 0")
+        if o.corridor_half_width <= 0 or o.side_memory_seconds < 0:
+            raise ValueError("obstacle: corridor_half_width > 0, side_memory_seconds >= 0")
         if o.low_obstacles not in ("avoid", "ignore"):
             raise ValueError("obstacle: low_obstacles must be 'avoid' or 'ignore'")
         if o.drops not in ("avoid", "ignore"):

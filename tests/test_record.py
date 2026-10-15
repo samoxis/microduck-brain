@@ -45,6 +45,27 @@ def test_replay_with_the_same_config_reproduces_every_command(tmp_path, suffix):
     assert rep.brain.stats.low_seen == w.brain.stats.low_seen >= 1
 
 
+def test_replay_is_exact_with_irregular_tick_times(tmp_path):
+    """Real loops tick at irregular times (e.g. 0.30000000000000004): the recording must keep them
+    exactly, or a time comparison takes another branch on replay."""
+    from microduck_brain.brain import Brain, Inputs
+
+    from .test_brain import clear, wall_ahead
+
+    path = tmp_path / "run.jsonl"
+    rec = Recorder(path)
+    b = Brain(Config())
+    t = 0.0
+    for i in range(300):
+        frame = wall_ahead(0.2) if 60 <= i < 90 else clear()
+        inp = Inputs(t, frame, True, "", 0.0, pose_for(), (0.0, 0.0))
+        rec.write(inp, b.tick(inp), b.state_name)
+        t += 0.05 + 1e-7 * (i % 7)          # jitter, like a real loop
+    rec.close()
+    rep = replay(path, Config())
+    assert rep.differing == 0
+
+
 def test_replay_with_another_config_shows_the_difference(tmp_path):
     path = tmp_path / "run.jsonl"
     record_world(path)
