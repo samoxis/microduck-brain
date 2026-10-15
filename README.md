@@ -18,27 +18,30 @@ What the robot does with it:
 - **stops sending walking commands when it falls or is unhealthy**, and resumes once it is upright;
 - **records every decision** for exact offline replay and plots.
 
-![A 300 s run in the MuJoCo apartment](docs/apartment-run.svg)
+![A 300 s run in the full simulator, apartment scene](docs/full-sim-run.svg)
 
-*A 300 s closed-loop run in the MuJoCo apartment scene (kinematic body, see below): the path
-coloured by state, a rough map built from wall returns, the stairwell it kept away from (black), and
-the low objects it went around (green). The recording is in [`docs/`](docs/) and replays exactly:
-`uv run microduck-brain-replay docs/apartment-run.jsonl.gz`.*
+*A 300 s run in Pollen's full simulator, with the official walking policies, in the apartment scene:
+the path coloured by state, a rough map built from wall returns, the stairwell it detected and kept
+away from (black), and the two low objects it went around (green: a ball and a cube). Positions are
+from the robot's own odometry. The recording is in [`docs/`](docs/) and replays exactly:
+`uv run microduck-brain-replay docs/full-sim-run.jsonl.gz`.*
 
 ## Results
 
 | Where | What was measured | Result |
 |---|---|---|
+| Full simulator, official walking policies (run by the author, [`tools/full_sim_run.sh`](tools/full_sim_run.sh)) | v0.3 (all behaviours), 300 s in the apartment | 44 m walked, 6.5 m² covered; 132 avoidances, 15 needing a stop; both low objects met (a ball, a cube) detected and avoided; the stairwell detected, closest approach of the trunk to its edge 0.18 m, never over it; **0 falls**; replay exact (5988 ticks) |
 | Full simulator, official walking policies (run by the author) | v1 (before low objects and drops), 150 s in the apartment | 85 avoidances, only 4 needing a full stop; **0 falls**; area covered 4.5 × 3.4 m |
 | Full simulator (run by the author) | Minimum commanded speeds at which the policy steps | 0.20 m/s forward, 1.1 rad/s turning; real speed ≈ 40% (forward) and 46–69% (turning) of commanded |
-| MuJoCo apartment, kinematic body, real ToF model ([`tools/kinematic_apartment.py`](tools/kinematic_apartment.py)) | 12 runs × 300 s from 6 rooms, two real turn rates: 334 m walked | **0 toy contacts, 0 entries over the stairwell**, 2 grazes of furniture (down from 22, see *Findings*), 791 avoidances |
+| MuJoCo apartment, kinematic body, real ToF model ([`tools/kinematic_apartment.py`](tools/kinematic_apartment.py); one run drawn in [`docs/apartment-run.svg`](docs/apartment-run.svg)) | 12 runs × 300 s from 6 rooms, two real turn rates: 334 m walked | **0 toy contacts, 0 entries over the stairwell**, 2 grazes of furniture (down from 22, see *Findings*), 791 avoidances |
 | Real MuJoCo sensor frames ([`tests/fixtures/`](tests/fixtures/)) | Floor model vs. the simulated sensor | error σ 0.8% (max 2.8%) |
 | Real MuJoCo sensor frames | False alarms on empty floor, trunk tilted ±3° pitch and roll | **0** in 96 frames (low objects) and 0 in 304 frames (drops, incl. 64 frames across the apartment's rooms) |
 | Test suite | 164 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
 
-**What has not been verified**: anything on a physical robot (the author doesn't have one yet), and
-the newest behaviour (low objects, drops, side memory) under the real walking dynamics, which needs the
-full simulator — it is the next thing the author will run.
+**What has not been verified**: anything on a physical robot (the author doesn't have one yet). In
+the full-simulator run, contacts with furniture are not measured (the headless simulator doesn't report
+them), and positions come from odometry, which drifts; the contact counts above are from the kinematic
+runs only.
 
 ## Findings worth knowing
 
@@ -46,7 +49,9 @@ These came out of measuring rather than assuming, and each one changed the desig
 
 1. **The policy has a dead zone.** Below 0.20 m/s forward or 1.1 rad/s turning the walking policy
    doesn't step at all; the first version (0.10 m/s) just stood still. The thresholds now live in the
-   code and the brain warns at startup if the config is below them.
+   code and the brain warns at startup if the config is below them. The turning threshold, the
+   real/commanded ratios and the drift were added to the upstream report,
+   [pollen-robotics/microduck_rl#59](https://github.com/pollen-robotics/microduck_rl/issues/59).
 2. **Turns must be measured, not timed.** The robot turns at roughly half the commanded rate, so a
    timed 160° turn came out around 80°. Turns now close the loop on `odom.yaw`.
 3. **A 7 cm cube is invisible within ~45 cm.** Standing, the sensor is 24.6 cm high and level; its
@@ -57,7 +62,8 @@ These came out of measuring rather than assuming, and each one changed the desig
    stairwell, its far floor is already beyond the lowest beam's landing point at ~0.3 m, so the hole
    vanishes from view; drops are remembered for 120 s. (In the simulator a beam into the hole returns
    "nothing in range" because it passes under the floor slab; a real sensor would see the step as a
-   longer range — both count.)
+   longer range — both count. Reported upstream with a tested fix:
+   [pollen-robotics/microduck_rl#76](https://github.com/pollen-robotics/microduck_rl/issues/76).)
 5. **The foot of every wall looks like a low object.** The first closed-loop run reported 178 "low
    objects" in an apartment with 7 toys: 99.97% were wall bases seen by the bottom rows. A bottom-row
    reading now counts only if the wall rows above it are clear.
@@ -119,6 +125,13 @@ Sockets are found automatically (the simulator's under `~/.cache/duck-sim/`, els
 `/run/`); `--robot-socket` / `--tof-socket` override them. Every parameter is documented in
 [`brain.toml`](brain.toml); unknown keys are rejected.
 
+A complete, recorded run in the full simulator (starts it headless in the apartment if needed, checks
+the duck stands and the world runs at real time, runs the brain, replays and plots; output in `runs/`):
+
+```bash
+bash tools/full_sim_run.sh                # 300 s; SECONDS_TO_RUN=600 for longer
+```
+
 The kinematic apartment runs and the simulator fixtures are regenerated with `microduck_rl`'s venv:
 
 ```bash
@@ -129,7 +142,7 @@ cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtur
 ## Limitations
 
 - Not yet run on a physical robot. The kinematic runs move the body ideally (no balance, no slip)
-  with perfect odometry; the real gait sways more and the odometry drifts.
+  with perfect odometry; in the full simulator the trunk sways ±2–3° and the odometry drifts.
 - An object that was never seen from a distance (already under the lowest beam) cannot be detected;
   nor can a drop narrower than the blind zone ahead (~0.7 m) approached from the side without having
   been seen. Glass is invisible to the sensor.
