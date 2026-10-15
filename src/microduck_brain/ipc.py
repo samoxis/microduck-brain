@@ -109,6 +109,8 @@ class Stream(threading.Thread):
     It reconnects on its own; ``connected`` tells whether the subscription is live.
     """
 
+    MAX_LINE_BYTES = 1024 * 1024
+
     def __init__(
         self,
         path: str,
@@ -130,7 +132,7 @@ class Stream(threading.Thread):
         while not self.stop.is_set():
             try:
                 self._session()
-            except (OSError, json.JSONDecodeError) as e:
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
                 log.debug("%s: %s", self.subscribe, e)
             self.connected = False
             self.stop.wait(0.5)
@@ -141,21 +143,36 @@ class Stream(threading.Thread):
         try:
             s.connect(self.path)
             s.sendall(_encode(self.subscribe, self.sub_params, 1))
-            f = s.makefile("rb")
+            # makefile().readline() cannot safely resume after a socket timeout.
+            # Keep NDJSON framing here so both idle and partial reads can resume.
+            pending = bytearray()
             while not self.stop.is_set():
                 try:
-                    line = f.readline()
+                    chunk = s.recv(4096)
                 except TimeoutError:
                     continue
-                if not line:
+                if not chunk:
                     return
-                msg = json.loads(line)
-                if msg.get("id") == 1:
-                    self.answer = msg.get("result") or {}
-                    self.connected = True
-                    continue
-                method = msg.get("method")
-                if method and msg.get("params") is not None:
-                    self.on_message(method, msg["params"])
+                pending.extend(chunk)
+                while not self.stop.is_set():
+                    end = pending.find(b"\n")
+                    if end < 0:
+                        if len(pending) > self.MAX_LINE_BYTES:
+                            raise OSError("stream message exceeds maximum size")
+                        break
+                    if end > self.MAX_LINE_BYTES:
+                        raise OSError("stream message exceeds maximum size")
+                    line = bytes(pending[:end])
+                    del pending[:end + 1]
+                    msg = json.loads(line)
+                    if not isinstance(msg, dict):
+                        raise OSError("stream message must be a JSON object")
+                    if msg.get("id") == 1:
+                        self.answer = msg.get("result") or {}
+                        self.connected = True
+                        continue
+                    method = msg.get("method")
+                    if method and msg.get("params") is not None:
+                        self.on_message(method, msg["params"])
         finally:
             s.close()
