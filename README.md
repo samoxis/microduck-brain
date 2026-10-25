@@ -36,7 +36,7 @@ from the robot's own odometry. The recording is in [`docs/`](docs/) and replays 
 | MuJoCo apartment, kinematic body, real ToF model ([`tools/kinematic_apartment.py`](tools/kinematic_apartment.py); one run drawn in [`docs/apartment-run.svg`](docs/apartment-run.svg)) | 12 runs × 300 s from 6 rooms, two real turn rates: 334 m walked | **0 toy contacts, 0 entries over the stairwell**, 2 grazes of furniture (down from 22, see *Findings*), 791 avoidances |
 | Real MuJoCo sensor frames ([`tests/fixtures/`](tests/fixtures/)) | Floor model vs. the simulated sensor | error σ 0.8% (max 2.8%) |
 | Real MuJoCo sensor frames | False alarms on empty floor, trunk tilted ±3° pitch and roll | **0** in 96 frames (low objects) and 0 in 304 frames (drops, incl. 64 frames across the apartment's rooms) |
-| Test suite | 164 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
+| Test suite | 176 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
 
 **What has not been verified**: anything on a physical robot (the author doesn't have one yet). In
 the full-simulator run, contacts with furniture are not measured (the headless simulator doesn't report
@@ -155,7 +155,8 @@ The author defined the goals, ran the full simulator with Pollen's walking polic
 thresholds and failure modes (the dead zone, the turn rate, the drift, the pushed cubes), and decided
 the direction at each version. The implementation, the simulator tooling and the tests were written
 with [Claude Code](https://claude.com/claude-code), Anthropic's agentic coding tool, which is why most
-commits are co-authored. Every behaviour was checked against measurements before being kept, and the
+commits are co-authored. A later fix to the IPC streams (resuming reads after a socket timeout) was
+made with OpenAI Codex. Every behaviour was checked against measurements before being kept, and the
 README reports what was not verified as plainly as what was.
 
 ## License
