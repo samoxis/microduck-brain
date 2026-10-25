@@ -2,6 +2,8 @@
 
 [![tests](https://github.com/samoxis/microduck-brain/actions/workflows/tests.yml/badge.svg)](https://github.com/samoxis/microduck-brain/actions/workflows/tests.yml)
 
+![Microduck biped walking in simulation](docs/microduck_walk.gif)
+
 An autonomy layer for **Microduck**, the 25 cm open-source biped from Pollen Robotics / Hugging Face.
 It runs as a separate client and talks to the robot only through its public JSON-RPC API over unix
 sockets — the same calls `robotctl` makes — so it needs no changes to the robot's software.
