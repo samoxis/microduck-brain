@@ -93,6 +93,11 @@ These came out of measuring rather than assuming, and each one changed the desig
    whenever the swaying trunk put the heading 6° off near a wall (27 "aborts" for 3 bends, and 69%
    more avoidances). Only a bend in progress can be aborted now, and every bend, refusal and abort
    is logged with its reason (`tools/explore_report.py` replays a recording and lists them).
+   Next, 29 of 32 refusals in the full simulator were for bends to the right. In the 2-D worlds,
+   with the walls known: 94% of all refusals pointed at a direction whose probed cells were *all*
+   beyond a wall, and 82% were towards the side the nearest wall was on. "Unvisited" includes cells
+   the robot can never reach; the side rule was refusing bends into walls, which is right, but it
+   means the novelty measure is wrong, not the side rule.
 
 ## How it works
 
@@ -157,6 +162,13 @@ the duck stands and the world runs at real time, runs the brain, replays and plo
 
 ```bash
 bash tools/full_sim_run.sh                # 300 s; SECONDS_TO_RUN=600 for longer
+```
+
+Exploration off vs. on in the full simulator, same commit, 3 + 3 runs of 600 s alternating, with
+mean, spread and range per metric (a difference counts only if the ranges don't overlap):
+
+```bash
+bash tools/ab_full_sim.sh                 # RUNS=5 for more; output in runs/ab-<timestamp>.json
 ```
 
 The kinematic apartment runs and the simulator fixtures are regenerated with `microduck_rl`'s venv:

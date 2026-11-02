@@ -427,8 +427,19 @@ class Brain:
             nl, nr = self.explorer.side_novelty(self._pos, self.yaw)
             if abs(nl - nr) >= 0.1:
                 novel = "left" if nl > nr else "right"
+                if side is None:
+                    how = "tie broken"
+                elif novel != side:
+                    how = f"overrode the freer side ({side})"
+                else:
+                    how = "agreed with the freer side"
                 if novel != side:
                     self.stats.novel_turns += 1
+                self.explore_event(
+                    self._last_now or 0.0, "side", 1.0 if novel == "left" else -1.0,
+                    f"{how}: margin {margin:.1f} m, novelty L {nl:.2f} R {nr:.2f}, "
+                    f"free L {view.left_free:.2f} R {view.right_free:.2f} m",
+                )
                 side = novel
         if side is None:
             side = self.cfg.obstacle.default_turn

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -69,6 +70,15 @@ def test_turn_in_place_goes_to_the_less_visited_side_when_both_are_free():
     # Left a little freer, but within turn_margin: exploration chooses the right.
     assert b.pick_turn(equal_view(2.3, 2.0), b.cfg.explore.turn_margin) == -1.0
     assert b.stats.novel_turns == 1
+
+
+def test_a_side_choice_is_logged_with_what_it_saw():
+    trail = [(x / 10, y / 10) for x in range(-20, 21) for y in range(3, 20, 2)]   # visited: the left
+    b = brain_at((0.0, 0.0), 0.0, trail)
+    b.pick_turn(equal_view(2.3, 2.0), b.cfg.explore.turn_margin)
+    t, ev, sign, why = b.explore_log[-1]
+    assert ev == "side" and sign == -1.0
+    assert why.startswith("overrode the freer side (left)") and "novelty L" in why and "free L 2.30 R 2.00" in why
 
 
 def test_a_clearly_freer_side_still_wins():
@@ -170,6 +180,37 @@ def test_exploration_replays_exactly(tmp_path):
     out = mod.report(str(path), cfg, 6.0)
     assert out["replay_differing_commands"] == 0
     assert out["bends_started"] == st.bends and sum(out["refusals"].values()) == st.bends_refused
+    assert out["after_side_choices"]["events"] == len(out["side_choice_list"])
+    assert out["after_every_turn_in_place"]["events"] > 0
+    assert sum(out["refusals_by_bend_side"].values()) == st.bends_refused
+
+
+def test_ab_summary_groups_by_config_and_flags_overlap(tmp_path):
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location("ab_summary", Path(__file__).parents[1] / "tools" / "ab_summary.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    def run_dir(name, enabled, area, avoids):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "brain.toml").write_text(f"[explore]\nenabled = {'true' if enabled else 'false'}\n")
+        (d / "summary.json").write_text(json.dumps({
+            "commands_differing_from_recording": 0,
+            "coverage": {"area_covered_m2": area, "cells_visited": int(area / 0.0625), "distance_m": 80.0,
+                         "bounding_box_m": [4.0, 3.0]},
+            "replayed": {"avoidances": avoids, "avoidances_with_stop": 30, "big_turns": 4,
+                         "seconds_per_state": {"turn": 60.0}, "holds_fall_or_unhealthy": 0},
+        }))
+        return d
+
+    dirs = [run_dir("a", False, 7.0, 190), run_dir("b", False, 7.4, 200), run_dir("c", True, 8.0, 195), run_dir("d", True, 8.5, 205)]
+    res = mod.summarise(dirs)
+    assert res["metrics"]["area_m2"]["off"]["mean"] == 7.2 and res["metrics"]["area_m2"]["on"]["n"] == 2
+    assert res["metrics"]["area_m2"]["ranges_overlap"] is False          # 7.0–7.4 vs 8.0–8.5
+    assert res["metrics"]["avoidances"]["ranges_overlap"] is True        # 190–200 vs 195–205
 
 
 # --- observe mode -----------------------------------------------------------------------
