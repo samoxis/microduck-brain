@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
@@ -178,6 +179,9 @@ class Runner:
                 cmd = self.brain.tick(inp)
                 self._send(cmd)
                 name = self.brain.state_name
+                for t_ev, ev, angle, why in self.brain.explore_log:
+                    log.info("explore: %s %+.0f°%s", ev, math.degrees(angle), f" ({why})" if why else "")
+                self.brain.explore_log.clear()
                 if self.recorder is not None:
                     self.recorder.write(inp, cmd, name)
                 if name != last_name:

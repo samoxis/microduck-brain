@@ -72,7 +72,10 @@ class Stats:
     holds_unsafe: int = 0         # holds for a fall / unhealthy robot
     holds_no_depth: int = 0       # holds for missing depth frames
     bends: int = 0                # exploration: heading bent towards a less visited direction
-    bends_aborted: int = 0        # exploration: bends cancelled because something was beside the body
+    bends_completed: int = 0      # ... and the new heading reached
+    bends_interrupted: int = 0    # ... ended by an obstacle ahead (the avoidance takes over)
+    bends_aborted: int = 0        # ... cancelled: something came beside the body on that side
+    bends_refused: int = 0        # a more novel direction existed, but the bend was not started (see the log)
     novel_turns: int = 0          # exploration: turned towards the less visited side (both about equally free)
     forward_seconds: float = 0.0
     state_seconds: dict[str, float] = field(default_factory=dict)
@@ -157,6 +160,7 @@ class Forward(State):
             brain.clear_time = 0.0
             self._start_episode(brain, view)
             self._straight = False
+            brain.end_bend(inputs.now, "interrupted", "obstacle ahead")
             target = brain.steer_sign * cfg.obstacle.steer_yaw_max * c
         else:
             brain.episode_open = False
@@ -167,8 +171,8 @@ class Forward(State):
                 # Clear again: the current direction becomes the heading to hold.
                 self._straight = True
                 brain.heading_target = brain.yaw
-            self._maybe_bend(brain, inputs, view)
             self._check_bend(brain, inputs.now)
+            self._maybe_bend(brain, inputs, view)
             target = self._heading_correction(brain, dt)
 
         # Slew-limit the turn command: no sudden jerks.
@@ -181,33 +185,46 @@ class Forward(State):
         e = brain.cfg.explore
         if not e.enabled or inputs.pos is None or brain.yaw is None or brain.heading_target is None:
             return
-        if inputs.now - brain.last_bend_check < e.bend_every:
-            return
-        if view.front is not None and view.front < e.bend_min_clear:
+        if brain.bend is not None or inputs.now - brain.last_bend_check < e.bend_every:
             return
         brain.last_bend_check = inputs.now
         bend = brain.explorer.best_bend(inputs.pos, brain.yaw)
-        if bend is not None and (view.left_free if bend > 0 else view.right_free) < e.bend_min_clear:
-            bend = None                       # that half of the view isn't clear: don't bend into it
-        if bend is not None and inputs.now < brain.side_busy_until[1.0 if bend > 0 else -1.0]:
-            bend = None                       # something was beside the body on that side
-        if bend is not None:
-            brain.heading_target = brain.yaw + bend
-            brain.heading_integral = 0.0
-            brain.stats.bends += 1
+        if bend is None:
+            return                            # straight ahead is as novel as anything else
+        side = 1.0 if bend > 0 else -1.0
+        reason = ""
+        if view.front is not None and view.front < e.bend_min_clear:
+            reason = f"ahead clear only {view.front:.2f} m"
+        elif (view.left_free if side > 0 else view.right_free) < e.bend_min_clear:
+            reason = f"{'left' if side > 0 else 'right'} half of the view clear only " \
+                     f"{view.left_free if side > 0 else view.right_free:.2f} m"
+        elif inputs.now < brain.side_busy_until[side]:
+            reason = f"something beside the body on the {'left' if side > 0 else 'right'}"
+        if reason:
+            brain.stats.bends_refused += 1
+            brain.explore_event(inputs.now, "refused", bend, reason)
+            return
+        brain.heading_target = brain.yaw + bend
+        brain.heading_integral = 0.0
+        brain.bend = (inputs.now, bend)
+        brain.stats.bends += 1
+        brain.explore_event(inputs.now, "bend", bend, "")
 
     @staticmethod
     def _check_bend(brain, now: float) -> None:
-        """Abort a bend towards a side where something was recently near the body: the 45° view
-        doesn't see beside the legs (finding 6), and the side memory lasts only a few seconds, less
-        than the slow robot needs to walk past a table corner."""
-        if brain.yaw is None or brain.heading_target is None:
+        """A bend in progress: done once the heading is reached; aborted if something is now beside
+        the body on that side (the 45° view doesn't see beside the legs, finding 6, and the side
+        memory lasts less than the slow robot needs to walk past a table corner). Only a bend is
+        ever aborted: the ordinary heading hold is left alone."""
+        if brain.bend is None or brain.yaw is None or brain.heading_target is None:
             return
         err = brain.heading_target - brain.yaw
-        if abs(err) >= 0.1 and now < brain.side_busy_until[1.0 if err > 0 else -1.0]:
+        if abs(err) < 0.1:
+            brain.end_bend(now, "completed", "")
+        elif now < brain.side_busy_until[1.0 if err > 0 else -1.0]:
             brain.heading_target = brain.yaw
             brain.heading_integral = 0.0
-            brain.stats.bends_aborted += 1
+            brain.end_bend(now, "aborted", f"something beside the body on the {'left' if err > 0 else 'right'}")
 
     @staticmethod
     def _start_episode(brain, view) -> None:
@@ -333,6 +350,8 @@ class Brain:
         self.explorer = Explorer(cfg)
         self.last_bend_check = -1e9      # exploration: when a bend was last considered (any state)
         self.side_busy_until = {1.0: -1e9, -1.0: -1e9}   # exploration: no bends towards that side until then
+        self.bend: tuple[float, float] | None = None     # exploration: (started at, angle) of the bend in progress
+        self.explore_log: list[tuple[float, str, float, str]] = []   # (t, event, angle rad, reason), drained by the runner
         self._pos: tuple[float, float] | None = None
         self.states: dict[str, State] = {}
         for s in (Hold(), Forward(), Brake(), Turn(), BigTurn()):
@@ -341,6 +360,24 @@ class Brain:
         self._last_now: float | None = None
         self._started = False
         self.last_hold_reason = ""
+
+    def explore_event(self, now: float, event: str, angle: float, reason: str) -> None:
+        self.explore_log.append((now, event, angle, reason))
+        if len(self.explore_log) > 1000:
+            del self.explore_log[:500]
+
+    def end_bend(self, now: float, how: str, reason: str) -> None:
+        if self.bend is None:
+            return
+        _, angle = self.bend
+        self.bend = None
+        if how == "completed":
+            self.stats.bends_completed += 1
+        elif how == "interrupted":
+            self.stats.bends_interrupted += 1
+        else:
+            self.stats.bends_aborted += 1
+        self.explore_event(now, how, angle, reason)
 
     def mark_busy_sides(self, now: float) -> None:
         """Exploration: a side with something near the body (side memory) gets no bends for a while."""
@@ -398,6 +435,8 @@ class Brain:
         return 1.0 if side == "left" else -1.0
 
     def _goto(self, name: str, inputs: Inputs) -> None:
+        if name != "forward":
+            self.end_bend(inputs.now, "interrupted", f"state {name}")
         self.state = self.states[name]
         self.state.enter(self, inputs)
 

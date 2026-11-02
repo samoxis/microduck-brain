@@ -43,7 +43,8 @@ from the robot's own odometry. The recording is in [`docs/`](docs/) and replays 
 | Real MuJoCo sensor frames ([`tests/fixtures/`](tests/fixtures/)) | Floor model vs. the simulated sensor | error σ 0.8% (max 2.8%) |
 | Real MuJoCo sensor frames | False alarms on empty floor, trunk tilted ±3° pitch and roll | **0** in 96 frames (low objects) and 0 in 304 frames (drops, incl. 64 frames across the apartment's rooms) |
 | Flat 2-D worlds, real beam geometry, measured real/commanded ratios ([`tests/world2d.py`](tests/world2d.py)) | Exploration on vs. off: 4 rooms × 10 seeds × 600 s, then 10 *new* seeds as a holdout | Area covered **+46%** on the holdout (30.2 vs 20.7 m² summed over the 4 rooms), **0 contacts** either way; not yet run in the full simulator |
-| Test suite | 190 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
+| Full simulator, official walking policies (run by the author), apartment, 600 s each | Exploration off vs. on, first version (3fedf98) | Area 7.31 vs 7.50 m² (+2.6%, within single-run noise); avoidances 194 vs 327; 3 bends but 27 "aborts" — a bug: the abort rule also reset the ordinary heading hold near walls. Fixed; to be re-measured |
+| Test suite | 192 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
 
 **What has not been verified**: anything on a physical robot (the author doesn't have one yet). In
 the full-simulator run, contacts with furniture are not measured (the headless simulator doesn't report
@@ -88,6 +89,10 @@ These came out of measuring rather than assuming, and each one changed the desig
    heading bends and side choices): +46% area. Its first version bent the heading towards a table
    corner beside the right leg — finding 6 again, plus the side memory expiring before the slow
    robot had walked past — so a side with anything near the body now gets no bends for 4 s.
+   In the full simulator that abort rule misfired: it also cancelled the ordinary heading hold
+   whenever the swaying trunk put the heading 6° off near a wall (27 "aborts" for 3 bends, and 69%
+   more avoidances). Only a bend in progress can be aborted now, and every bend, refusal and abort
+   is logged with its reason (`tools/explore_report.py` replays a recording and lists them).
 
 ## How it works
 

@@ -112,7 +112,10 @@ def summary(st, duration: float) -> dict:
         "holds_no_depth": st.holds_no_depth,
         "walking_forward_s": round(st.forward_seconds, 1),
         "exploration_bends": st.bends,
+        "exploration_bends_completed": st.bends_completed,
+        "exploration_bends_interrupted": st.bends_interrupted,
         "exploration_bends_aborted": st.bends_aborted,
+        "exploration_bends_refused": st.bends_refused,
         "exploration_side_choices": st.novel_turns,
         "seconds_per_state": {k: round(v, 1) for k, v in st.state_seconds.items()},
     }

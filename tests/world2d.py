@@ -109,6 +109,7 @@ class Result:
     cells: set = field(default_factory=set)
     contacts: int = 0
     stats: object = None
+    bend_open: bool = False
 
     @property
     def area(self) -> float:
@@ -150,6 +151,7 @@ def run(world: World, cfg: Config, seconds: float = 300.0, seed: int = 0, drift:
         res.cells.add((math.floor(x / 0.25), math.floor(y / 0.25)))
         t += dt
     res.stats = brain.stats
+    res.bend_open = brain.bend is not None
     return res
 
 

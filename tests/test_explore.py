@@ -86,12 +86,35 @@ def test_disabled_exploration_changes_nothing():
 
 
 def test_a_bend_is_aborted_when_something_is_beside_the_body_on_that_side():
-    b = brain_at((0.0, 0.0), 0.0)
-    b.heading_target = -0.8                                   # bending right
-    b.side_busy_until[-1.0] = 10.0                            # a table corner beside the right leg
     from microduck_brain.brain import Forward
+
+    b = brain_at((0.0, 0.0), 0.0)
+    b.heading_target, b.bend = -0.8, (4.0, -0.8)              # bending right
+    b.side_busy_until[-1.0] = 10.0                            # a table corner beside the right leg
     Forward._check_bend(b, 5.0)
-    assert b.heading_target == b.yaw and b.stats.bends_aborted == 1
+    assert b.heading_target == b.yaw and b.bend is None and b.stats.bends_aborted == 1
+    assert b.explore_log[-1][1] == "aborted" and "right" in b.explore_log[-1][3]
+
+
+def test_the_ordinary_heading_hold_is_never_aborted():
+    """Regression (full simulator, 600 s: 27 'aborts' for 3 bends): with no bend in progress, a
+    heading error from the gait's sway near a wall must not reset the heading target."""
+    from microduck_brain.brain import Forward
+
+    b = brain_at((0.0, 0.0), 0.0)
+    b.heading_target = -0.15                                  # drifted 8.6° off the held heading
+    b.side_busy_until[-1.0] = 10.0
+    Forward._check_bend(b, 5.0)
+    assert b.heading_target == -0.15 and b.stats.bends_aborted == 0
+
+
+def test_a_bend_completes_when_the_heading_is_reached():
+    from microduck_brain.brain import Forward
+
+    b = brain_at((0.0, 0.0), -0.75)
+    b.heading_target, b.bend = -0.8, (4.0, -0.8)
+    Forward._check_bend(b, 6.0)
+    assert b.bend is None and b.stats.bends_completed == 1
 
 
 def test_side_hazard_marks_its_side_busy():
@@ -131,9 +154,22 @@ def test_exploration_replays_exactly(tmp_path):
     rec = Recorder(path)
     r = world2d.run(world2d.worlds()[3], cfg, 600, 2, recorder=rec)
     rec.close()
-    assert r.stats.bends > 0 and r.stats.bends_aborted > 0      # the run exercises both
+    st = r.stats
+    assert st.bends > 0 and st.bends_refused > 0
+    assert st.bends == st.bends_completed + st.bends_interrupted + st.bends_aborted + (1 if r.bend_open else 0)
     rep = replay(path, cfg)
     assert rep.ticks == 12000 and rep.differing == 0
+
+    # The report replays the same recording exactly and accounts for every bend.
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location("explore_report", Path(__file__).parents[1] / "tools" / "explore_report.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    out = mod.report(str(path), cfg, 6.0)
+    assert out["replay_differing_commands"] == 0
+    assert out["bends_started"] == st.bends and sum(out["refusals"].values()) == st.bends_refused
 
 
 # --- observe mode -----------------------------------------------------------------------
