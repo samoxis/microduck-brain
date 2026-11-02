@@ -18,7 +18,11 @@ What the robot does with it:
 - **keeps away from drops** (ledges, stairs going down);
 - **remembers hazards it can no longer see**, in odometry coordinates;
 - **stops sending walking commands when it falls or is unhealthy**, and resumes once it is upright;
-- **records every decision** for exact offline replay and plots.
+- **records every decision** for exact offline replay and plots;
+- optionally **explores**: prefers directions it has not been to yet (`[explore]`, off by default
+  until measured in the full simulator);
+- has an **observe mode** for a first run on a physical robot: it decides and records, but sends the
+  robot nothing.
 
 ![A 300 s run in the full simulator, apartment scene](docs/full-sim-run.svg)
 
@@ -38,7 +42,8 @@ from the robot's own odometry. The recording is in [`docs/`](docs/) and replays 
 | MuJoCo apartment, kinematic body, real ToF model ([`tools/kinematic_apartment.py`](tools/kinematic_apartment.py); one run drawn in [`docs/apartment-run.svg`](docs/apartment-run.svg)) | 12 runs × 300 s from 6 rooms, two real turn rates: 334 m walked | **0 toy contacts, 0 entries over the stairwell**, 2 grazes of furniture (down from 22, see *Findings*), 791 avoidances |
 | Real MuJoCo sensor frames ([`tests/fixtures/`](tests/fixtures/)) | Floor model vs. the simulated sensor | error σ 0.8% (max 2.8%) |
 | Real MuJoCo sensor frames | False alarms on empty floor, trunk tilted ±3° pitch and roll | **0** in 96 frames (low objects) and 0 in 304 frames (drops, incl. 64 frames across the apartment's rooms) |
-| Test suite | 176 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
+| Flat 2-D worlds, real beam geometry, measured real/commanded ratios ([`tests/world2d.py`](tests/world2d.py)) | Exploration on vs. off: 4 rooms × 10 seeds × 600 s, then 10 *new* seeds as a holdout | Area covered **+46%** on the holdout (30.2 vs 20.7 m² summed over the 4 rooms), **0 contacts** either way; not yet run in the full simulator |
+| Test suite | 190 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
 
 **What has not been verified**: anything on a physical robot (the author doesn't have one yet). In
 the full-simulator run, contacts with furniture are not measured (the headless simulator doesn't report
@@ -77,6 +82,13 @@ These came out of measuring rather than assuming, and each one changed the desig
    outside the 45° field of view — while the robot arced away from something on its left; a longer
    memory didn't remove them, a wider view would (turning the head, or the camera).
 
+7. **Without a goal, the brain settles into a loop.** In the flat 2-D worlds the reactive brain
+   covers the same area at 300 s and at 900 s (4.19 vs 4.21 m² in a 4×3 m room): it follows the
+   walls on a fixed circuit. Exploration breaks the loop with a handful of decisions per run (a few
+   heading bends and side choices): +46% area. Its first version bent the heading towards a table
+   corner beside the right leg — finding 6 again, plus the side memory expiring before the slow
+   robot had walked past — so a side with anything near the body now gets no bends for 4 s.
+
 ## How it works
 
 ```mermaid
@@ -100,6 +112,10 @@ flowchart LR
   `safety.gravity`, `odom.position[2]`) — the same inputs the robot's own floor filter uses. Shorter
   means an object, longer (or nothing) means a drop.
 - **`hazards.py`** confirms detections over time and remembers them in odometry coordinates.
+- **`explore.py`** (optional) remembers the grid cells the robot has walked through, in odometry
+  coordinates. At an obstacle, when both sides are about equally free, the brain turns towards the
+  less visited one; while walking with a clear way it now and then bends its heading towards a less
+  visited direction, within 60°.
 - **`brain.py`** is the state machine. A safety guard sits above every state: fallen, unhealthy or
   blind means `hold`. New behaviours (dance, rest, play) are states registered with `brain.register()`.
 - **`runner.py` / `ipc.py`** speak NDJSON JSON-RPC 2.0 to `robotd` and `tofd`, with the formats
@@ -121,7 +137,11 @@ uv run microduck-brain --duration 180 --record run.jsonl.gz
 uv run microduck-brain-replay run.jsonl.gz              # must report 0 differing commands
 uv run microduck-brain-plot run.jsonl.gz -o run.svg
 uv run pytest                                           # the test suite
+uv run python -m tests.world2d --seconds 300            # coverage benchmark, exploration on vs. off
 ```
+
+On a physical robot, start with `--observe` (carried by hand or on a stand): nothing is sent to
+the robot, and the recording shows what the brain would have done.
 
 Sockets are found automatically (the simulator's under `~/.cache/duck-sim/`, else the robot's under
 `/run/`); `--robot-socket` / `--tof-socket` override them. Every parameter is documented in
@@ -149,6 +169,8 @@ cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtur
   nor can a drop narrower than the blind zone ahead (~0.7 m) approached from the side without having
   been seen. Glass is invisible to the sensor.
 - After a fall the brain waits; it does not try to stand the robot up.
+- Exploration is measured only in flat 2-D worlds (ideal floor, no sway, perfect odometry). Its map is
+  in odometry coordinates, so it drifts with the odometry, and it is forgotten after a fall.
 - The 45° field of view is narrow while turning (finding 6).
 
 ## How this was built

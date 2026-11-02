@@ -31,8 +31,12 @@ def default_sockets(cfg: Config) -> tuple[str, str]:
 
 class Runner:
     def __init__(self, cfg: Config, robot_sock: str, tof_sock: str, clock=time.monotonic,
-                 recorder=None) -> None:
+                 recorder=None, observe: bool = False) -> None:
         self.cfg = cfg
+        # Observe: read the sensors, decide and record as usual, but send the robot NOTHING (no
+        # robot.move, no robot.stop). For a first run on a physical robot: carried by hand or on a
+        # stand, its recording shows what the brain would have done, and replays exactly.
+        self.observe = observe
         self.brain = Brain(cfg)
         self.clock = clock
         self.recorder = recorder          # optional: record.Recorder, one line per tick
@@ -134,7 +138,7 @@ class Runner:
 
     # --- output ----------------------------------------------------------------
     def _send(self, cmd) -> None:
-        if cmd.kind == "none":
+        if cmd.kind == "none" or self.observe:
             return
         try:
             if not self.link.connected:
@@ -148,6 +152,8 @@ class Runner:
 
     def send_stop(self) -> None:
         """Safe stop on exit: zero velocity + robot.stop, reconnecting once if needed."""
+        if self.observe:
+            return
         for _ in range(2):
             try:
                 if not self.link.connected:

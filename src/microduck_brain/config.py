@@ -96,6 +96,20 @@ class Heading:
 
 
 @dataclass
+class Explore:
+    """Prefer directions not visited yet (see explore.py). Off by default until measured in the full simulator."""
+
+    enabled: bool = False
+    cell: float = 0.25
+    turn_margin: float = 1.5
+    steer_margin: float = 0.0
+    bend_every: float = 4.0
+    bend_min_clear: float = 0.7
+    max_bend_deg: float = 60.0
+    novelty_margin: float = 0.3
+
+
+@dataclass
 class Safety:
     tof_timeout: float = 0.5
     state_timeout: float = 1.0
@@ -118,6 +132,7 @@ class Config:
     drop: Drop = field(default_factory=Drop)
     corner: Corner = field(default_factory=Corner)
     heading: Heading = field(default_factory=Heading)
+    explore: Explore = field(default_factory=Explore)
     safety: Safety = field(default_factory=Safety)
     loop: Loop = field(default_factory=Loop)
 
@@ -159,6 +174,11 @@ class Config:
             raise ValueError("obstacle: default_turn must be 'left' or 'right'")
         if self.motion.forward_speed < 0 or self.motion.turn_speed <= 0 or self.motion.big_turn_speed <= 0:
             raise ValueError("motion: speeds must be positive")
+        e = self.explore
+        if e.cell <= 0 or e.turn_margin < 0 or e.steer_margin < 0 or e.bend_every <= 0 or e.bend_min_clear < 0:
+            raise ValueError("explore: cell > 0, turn_margin, steer_margin >= 0, bend_every > 0, bend_min_clear >= 0")
+        if not 0 <= e.max_bend_deg <= 90 or not 0 <= e.novelty_margin <= 1:
+            raise ValueError("explore: max_bend_deg in [0, 90], novelty_margin in [0, 1]")
         if self.loop.rate_hz <= 0:
             raise ValueError("loop: rate_hz must be > 0")
         if self.corner.turns_before_big_turn < 1:

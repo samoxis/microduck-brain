@@ -31,7 +31,8 @@ from dataclasses import dataclass, field
 
 from .config import Config
 from .depth import DepthFrame, Pose, View, analyse
-from .hazards import LOW, HazardMap
+from .explore import Explorer
+from .hazards import LOW, SIDE, HazardMap
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,9 @@ class Stats:
     turn_timeouts: int = 0        # turns that did not clear within max_turn_time
     holds_unsafe: int = 0         # holds for a fall / unhealthy robot
     holds_no_depth: int = 0       # holds for missing depth frames
+    bends: int = 0                # exploration: heading bent towards a less visited direction
+    bends_aborted: int = 0        # exploration: bends cancelled because something was beside the body
+    novel_turns: int = 0          # exploration: turned towards the less visited side (both about equally free)
     forward_seconds: float = 0.0
     state_seconds: dict[str, float] = field(default_factory=dict)
 
@@ -100,6 +104,7 @@ class Hold(State):
         self._stop_sent = False
         brain.heading_integral = 0.0
         brain.hazards.forget()   # after a fall the odometry's position can no longer be trusted
+        brain.explorer.forget()
 
     def step(self, brain, inputs):
         cmd = NONE
@@ -162,6 +167,8 @@ class Forward(State):
                 # Clear again: the current direction becomes the heading to hold.
                 self._straight = True
                 brain.heading_target = brain.yaw
+            self._maybe_bend(brain, inputs, view)
+            self._check_bend(brain, inputs.now)
             target = self._heading_correction(brain, dt)
 
         # Slew-limit the turn command: no sudden jerks.
@@ -169,12 +176,45 @@ class Forward(State):
         self._yaw_cmd += max(-step, min(step, target - self._yaw_cmd))
         return move(cfg.motion.forward_speed, self._yaw_cmd), None
 
+    def _maybe_bend(self, brain, inputs, view) -> None:
+        """Exploration: now and then, bend the heading towards a less visited direction."""
+        e = brain.cfg.explore
+        if not e.enabled or inputs.pos is None or brain.yaw is None or brain.heading_target is None:
+            return
+        if inputs.now - brain.last_bend_check < e.bend_every:
+            return
+        if view.front is not None and view.front < e.bend_min_clear:
+            return
+        brain.last_bend_check = inputs.now
+        bend = brain.explorer.best_bend(inputs.pos, brain.yaw)
+        if bend is not None and (view.left_free if bend > 0 else view.right_free) < e.bend_min_clear:
+            bend = None                       # that half of the view isn't clear: don't bend into it
+        if bend is not None and inputs.now < brain.side_busy_until[1.0 if bend > 0 else -1.0]:
+            bend = None                       # something was beside the body on that side
+        if bend is not None:
+            brain.heading_target = brain.yaw + bend
+            brain.heading_integral = 0.0
+            brain.stats.bends += 1
+
+    @staticmethod
+    def _check_bend(brain, now: float) -> None:
+        """Abort a bend towards a side where something was recently near the body: the 45° view
+        doesn't see beside the legs (finding 6), and the side memory lasts only a few seconds, less
+        than the slow robot needs to walk past a table corner."""
+        if brain.yaw is None or brain.heading_target is None:
+            return
+        err = brain.heading_target - brain.yaw
+        if abs(err) >= 0.1 and now < brain.side_busy_until[1.0 if err > 0 else -1.0]:
+            brain.heading_target = brain.yaw
+            brain.heading_integral = 0.0
+            brain.stats.bends_aborted += 1
+
     @staticmethod
     def _start_episode(brain, view) -> None:
         if not brain.episode_open:
             brain.episode_open = True
             brain.stats.avoids += 1
-            brain.steer_sign = brain.pick_turn(view)
+            brain.steer_sign = brain.pick_turn(view, brain.cfg.explore.steer_margin)
 
     @staticmethod
     def _heading_correction(brain, dt: float) -> float:
@@ -201,7 +241,7 @@ class Brake(State):
         if inputs.now - self.since < brain.cfg.obstacle.stop_pause:
             return move(0.0, 0.0), None
         view = brain.look(inputs)
-        brain.turn_sign = brain.pick_turn(view)
+        brain.turn_sign = brain.pick_turn(view, brain.cfg.explore.turn_margin)
         brain.steer_sign = brain.turn_sign
         if brain.consecutive_avoids >= brain.cfg.corner.turns_before_big_turn:
             brain.consecutive_avoids = 0
@@ -290,6 +330,10 @@ class Brain:
         self.heading_target: float | None = None
         self.heading_integral = 0.0
         self.hazards = HazardMap(cfg, self.stats)
+        self.explorer = Explorer(cfg)
+        self.last_bend_check = -1e9      # exploration: when a bend was last considered (any state)
+        self.side_busy_until = {1.0: -1e9, -1.0: -1e9}   # exploration: no bends towards that side until then
+        self._pos: tuple[float, float] | None = None
         self.states: dict[str, State] = {}
         for s in (Hold(), Forward(), Brake(), Turn(), BigTurn()):
             self.register(s)
@@ -297,6 +341,12 @@ class Brain:
         self._last_now: float | None = None
         self._started = False
         self.last_hold_reason = ""
+
+    def mark_busy_sides(self, now: float) -> None:
+        """Exploration: a side with something near the body (side memory) gets no bends for a while."""
+        for h in self.hazards.items:
+            if h.kind == SIDE and -0.15 < h.forward < 0.6 and abs(h.lateral) < 0.35:
+                self.side_busy_until[1.0 if h.lateral >= 0 else -1.0] = now + self.cfg.explore.bend_every
 
     def register(self, state: State) -> None:
         self.states[state.name] = state
@@ -330,9 +380,19 @@ class Brain:
         """Current low objects (forward, left), seen or remembered."""
         return [(h.forward, h.lateral) for h in self.hazards.items if h.kind == LOW]
 
-    def pick_turn(self, view: View) -> float:
-        """+1 = left, -1 = right: the freer side; on a tie, the configured default."""
+    def pick_turn(self, view: View, margin: float = 0.0) -> float:
+        """+1 = left, -1 = right: the freer side; on a tie, the configured default. With exploration,
+        when the two sides' free space differs by less than ``margin`` (m), the less visited side."""
         side = view.freer_side
+        e = self.cfg.explore
+        if e.enabled and self._pos is not None and self.yaw is not None \
+                and abs(view.left_free - view.right_free) < margin:
+            nl, nr = self.explorer.side_novelty(self._pos, self.yaw)
+            if abs(nl - nr) >= 0.1:
+                novel = "left" if nl > nr else "right"
+                if novel != side:
+                    self.stats.novel_turns += 1
+                side = novel
         if side is None:
             side = self.cfg.obstacle.default_turn
         return 1.0 if side == "left" else -1.0
@@ -352,6 +412,10 @@ class Brain:
         self._last_now = inputs.now
         self._track_yaw(inputs.yaw)
         self.hazards.update(inputs.frame, inputs.pose, inputs.pos, self.yaw, inputs.safe, inputs.now)
+        self._pos = inputs.pos
+        if self.cfg.explore.enabled and inputs.safe:
+            self.explorer.update(inputs.pos, inputs.now)
+            self.mark_busy_sides(inputs.now)
 
         if not self._started:
             self._started = True

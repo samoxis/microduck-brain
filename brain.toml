@@ -81,6 +81,18 @@ ki = 0.3                  # cancels the gait's constant drift to one side
 max_correction = 0.5      # the most correction added to the turn rate (rad/s)
 yaw_sign = 1.0            # 1 = odom.yaw grows to the left (like vyaw, as the protocol states); -1 if reversed
 
+[explore]
+# Prefer directions not visited yet, remembered as grid cells in the odometry frame (explore.py).
+# Off by default: measured only in flat 2-D worlds so far (tests/world2d.py), not in the full simulator.
+enabled = false
+cell = 0.25               # grid cell size (m)
+turn_margin = 1.5         # turning in place: pick the less visited side if both sides' free space differs by less than this (m)
+steer_margin = 0.0        # steering while walking: the same; 0 = always steer to the freer side
+bend_every = 4.0          # while walking clear, consider bending the heading this often (s)
+bend_min_clear = 0.7      # ... only if this much is clear ahead and on that side of the view (m)
+max_bend_deg = 60.0       # the largest bend of the heading towards a less visited direction (degrees)
+novelty_margin = 0.3      # bend only if that direction is this much more novel (0..1) than straight ahead
+
 [safety]
 tof_timeout = 0.5         # a depth frame older than this => stop (never walk blind)
 state_timeout = 1.0       # robot.state silent this long => treated as unsafe
