@@ -6,6 +6,11 @@ brain's (CLOCK_MONOTONIC, one machine), so the two line up in time directly; the
 odometry's frame with the pose at the recording's first sample, where the odometry is still exact.
 
     uv run python tools/odom_truth.py runs/<run>/run.jsonl.gz runs/<run>/truth.txt [--json out.json]
+    uv run python tools/odom_truth.py ... --localize     # also the corrected odometry ([localize])
+
+With --localize the recording is replayed through a brain with [localize] on, and its corrected pose
+is compared with the truth too. The correction depends only on the recorded frames and odometry,
+not on what the brain then did, so this measures it on the very same run.
 """
 
 from __future__ import annotations
@@ -46,9 +51,25 @@ def align(odom, truth):
     return out
 
 
-def drift(run: str, truth_file: str) -> dict:
-    odom = [(t.inputs.now, t.inputs.pos[0], t.inputs.pos[1], t.inputs.yaw) for t in read(run)
-            if t.inputs.pos is not None and t.inputs.yaw is not None]
+def corrected(run: str) -> list:
+    from microduck_brain.brain import Brain
+    from microduck_brain.config import from_dict
+
+    brain = Brain(from_dict({"localize": {"enabled": True}}))
+    out = []
+    for t in read(run):
+        brain.tick(t.inputs)
+        inp = t.inputs
+        if inp.pos is None or inp.yaw is None:
+            continue
+        p, a = brain.localizer.correct(inp.pos, inp.yaw)
+        out.append((inp.now, p[0], p[1], a))
+    return out
+
+
+def drift(run: str, truth_file: str, odom=None) -> dict:
+    odom = odom or [(t.inputs.now, t.inputs.pos[0], t.inputs.pos[1], t.inputs.yaw) for t in read(run)
+                    if t.inputs.pos is not None and t.inputs.yaw is not None]
     truth = [tuple(float(v) for v in line.split()) for line in Path(truth_file).read_text().splitlines() if line.strip()]
     tr = align(odom, truth)
     times = [s[0] for s in tr]
@@ -80,9 +101,13 @@ def main() -> int:
     ap.add_argument("run")
     ap.add_argument("truth")
     ap.add_argument("--json")
+    ap.add_argument("--localize", action="store_true", help="also the odometry corrected by [localize]")
     args = ap.parse_args()
     res = drift(args.run, args.truth)
-    print(json.dumps({k: v for k, v in res.items() if k != "every_10s"}, indent=2))
+    if args.localize:
+        res["corrected"] = drift(args.run, args.truth, corrected(args.run))
+    print(json.dumps({k: (v if k != "corrected" else {kk: vv for kk, vv in v.items() if kk != "every_10s"})
+                      for k, v in res.items() if k != "every_10s"}, indent=2))
     if args.json:
         Path(args.json).write_text(json.dumps(res, indent=2))
     return 0
