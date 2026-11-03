@@ -406,6 +406,7 @@ def low_obstacles(frame: DepthFrame, pose: Pose | None, cfg, geom: Geometry | No
 LOW_MAX_HEIGHT = 0.15    # pitched head: a return higher than this above the floor is a wall, not a low object
 LOW_KEEP_HEIGHT = 0.10   # ... and only one this low, and within LOW_REACH ahead, is reported as a low object
 LOW_REACH = 0.5          # the gap under the level beams (finding 3); further out the level head sees them
+LOW_MIN_HEIGHT = 0.04    # pitched: a point lower than this is the floor read a little short (trunk lean)
 
 
 def _low_tilted(frame: DepthFrame, cfg, geom: Geometry) -> list[LowObstacle]:
@@ -432,9 +433,11 @@ def _low_tilted(frame: DepthFrame, cfg, geom: Geometry) -> list[LowObstacle]:
                 continue
             if above < horiz + lo.wall_margin or d * vx < lo.min_range:
                 continue                     # the foot of a wall / phantom returns close in
-            if geom.pitched and (d * vx > LOW_REACH or height > LOW_KEEP_HEIGHT):
+            if geom.pitched and (d * vx > LOW_REACH or height > LOW_KEEP_HEIGHT or height < LOW_MIN_HEIGHT):
                 # Far out, a few degrees of sway move the floor a lot: in the full simulator 85% of
                 # pitched "low objects" were 0.5-4 m away, ~14 000 a run on furniture and wall feet.
+                # And the false ones close in were mostly within 3 cm of the floor (the floor read a
+                # little short with the trunk leaning 1-4 deg); cube and ball tops are 7-8 cm.
                 continue
             exp_nom = geom.floor.expected(i, 0.0)
             out.append(LowObstacle(r, c, d, d * vx, d * vy, d / exp_nom if math.isfinite(exp_nom) else 0.0))
