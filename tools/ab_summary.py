@@ -37,9 +37,10 @@ METRICS = [
 ]
 
 
-def load(d: Path) -> tuple[str, dict, dict | None]:
+def load(d: Path, key: str = "explore.enabled") -> tuple[str, dict, dict | None]:
     cfg = tomllib.loads((d / "brain.toml").read_text()) if (d / "brain.toml").exists() else {}
-    label = "on" if cfg.get("explore", {}).get("enabled", False) else "off"
+    sec, k = key.split(".")
+    label = "on" if cfg.get(sec, {}).get(k, False) else "off"
     s = json.loads((d / "summary.json").read_text())
     rp = d / "explore_report.json"
     r = json.loads(rp.read_text()) if rp.exists() and rp.stat().st_size else None
@@ -59,12 +60,12 @@ def describe(vals: list[float]) -> dict:
     }
 
 
-def summarise(dirs: list[Path]) -> dict:
+def summarise(dirs: list[Path], key: str = "explore.enabled") -> dict:
     groups: dict[str, list[tuple[Path, dict, dict | None]]] = {"off": [], "on": []}
     for d in dirs:
-        label, s, r = load(d)
+        label, s, r = load(d, key)
         groups[label].append((d, s, r))
-    out = {"runs": {k: [str(d) for d, _, _ in v] for k, v in groups.items()}, "metrics": {}}
+    out = {"key": key, "runs": {k: [str(d) for d, _, _ in v] for k, v in groups.items()}, "metrics": {}}
     for name, get, better in METRICS:
         row = {}
         for label, runs in groups.items():
@@ -80,7 +81,7 @@ def summarise(dirs: list[Path]) -> dict:
 
 def print_table(res: dict, commit: str) -> None:
     n_off, n_on = len(res["runs"]["off"]), len(res["runs"]["on"])
-    print(f"\ncommit {commit or '?'} — explore OFF: {n_off} runs, ON: {n_on} runs\n")
+    print(f"\ncommit {commit or '?'} — {res.get('key', 'explore.enabled')} OFF: {n_off} runs, ON: {n_on} runs\n")
     print(f"{'metric':32s} {'OFF mean ± sd [min–max]':28s} {'ON mean ± sd [min–max]':28s} {'ON−OFF':>8s}  signal?")
     for name, row in res["metrics"].items():
         def cell(g):
@@ -95,8 +96,9 @@ def main() -> int:
     ap.add_argument("dirs", nargs="+", type=Path)
     ap.add_argument("--json", help="also write the result here")
     ap.add_argument("--commit", default="")
+    ap.add_argument("--key", default="explore.enabled", help="the config switch the runs differ in")
     args = ap.parse_args()
-    res = summarise(args.dirs)
+    res = summarise(args.dirs, args.key)
     res["commit"] = args.commit
     print_table(res, args.commit)
     if args.json:
