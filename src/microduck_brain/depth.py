@@ -321,6 +321,9 @@ class Geometry:
         self.margin = cfg.low.range_margin
         mid = 3 * 8                      # a column's side: where its middle row points, in the trunk
         self._side = [self.beams[mid + c][1] for c in range(8)]
+        fwd = _rotate(pose.sensor_quat, (1.0, 0.0, 0.0))
+        # Looking down more than 5 deg relative to the trunk: only then is the near-and-low gate on.
+        self.pitched = math.atan2(-fwd[2], math.hypot(fwd[0], fwd[1])) > math.radians(5.0)
 
     def not_an_obstacle(self, i: int, d: float) -> bool:
         exp = self.floor.expected(i, self.tilt)
@@ -401,6 +404,8 @@ def low_obstacles(frame: DepthFrame, pose: Pose | None, cfg, geom: Geometry | No
 
 
 LOW_MAX_HEIGHT = 0.15    # pitched head: a return higher than this above the floor is a wall, not a low object
+LOW_KEEP_HEIGHT = 0.10   # ... and only one this low, and within LOW_REACH ahead, is reported as a low object
+LOW_REACH = 0.5          # the gap under the level beams (finding 3); further out the level head sees them
 
 
 def _low_tilted(frame: DepthFrame, cfg, geom: Geometry) -> list[LowObstacle]:
@@ -427,6 +432,10 @@ def _low_tilted(frame: DepthFrame, cfg, geom: Geometry) -> list[LowObstacle]:
                 continue
             if above < horiz + lo.wall_margin or d * vx < lo.min_range:
                 continue                     # the foot of a wall / phantom returns close in
+            if geom.pitched and (d * vx > LOW_REACH or height > LOW_KEEP_HEIGHT):
+                # Far out, a few degrees of sway move the floor a lot: in the full simulator 85% of
+                # pitched "low objects" were 0.5-4 m away, ~14 000 a run on furniture and wall feet.
+                continue
             exp_nom = geom.floor.expected(i, 0.0)
             out.append(LowObstacle(r, c, d, d * vx, d * vy, d / exp_nom if math.isfinite(exp_nom) else 0.0))
     return out

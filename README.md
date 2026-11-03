@@ -49,6 +49,7 @@ from the robot's own odometry. The recording is in [`docs/`](docs/) and replays 
 | Full simulator in a 4-core cloud container (`tools/ab_full_sim.sh`), apartment, 5 + 5 runs of 600 s alternating, frozen commit `0f9f816` | Exploration off vs. on | Area 7.04 ± 1.05 vs 7.74 ± 1.40 m² (5.25–8.06 vs 5.56–9.06): **noise**, the ranges overlap; avoidances 396 vs 388, noise; 0 falls. Why: 0.4 bends a run (2-D: ~20), because 43 of 45 attempts were refused — something beside the body (the apartment is cramped for a 10 cm/s robot) |
 | Full simulator, cloud container, apartment, 5 + 5 runs of 600 s alternating, frozen commit `3b323ee` | Head scan off vs. on (±25°, 2.5 s) | Area 7.25 ± 1.30 vs 5.65 ± 2.26 m², avoidances 365 vs 410: **noise** both, the ranges overlap (the trend is the wrong way: −22% area). 0 falls with the scan on. Contacts, what the scan is for, were not measured in these runs (measured since: `MEASURE=1`) |
 | Real MuJoCo frames, head pitched down with robot.head (`tests/fixtures/mujoco_head_pitch.json`) | Where a 7 cm cube is seen, and false alarms on empty floor | Level head: from 0.50 m. Pitched 20°: **from 0.20 m, no gap to 0.60 m**; 28.6°: from 0.16 m. 0 alarms in 48 empty-floor frames (the level-head arithmetic, unaware of the pitch, reads the floor as a wall in all 24 frames at ≥ 20°) |
+| Full simulator, cloud container, apartment, 3 + 3 runs of 600 s with contacts logged (`MEASURE=1`), commit `59b7f5d` | Head pitch off vs. on (20° down while stopping, turning, approaching) | **Worse, and clearly** (ranges separated): area 8.23 → 4.00 m², full stops 29 → 108, big turns 6 → 33; 0 falls either way; toy contacts 0 and 0. Cause: 570–700 "low objects" a run (10–20 level), ~14 000 returns, most 0.7–1.5 m away on furniture and wall feet (the sensor was 25–28° down with the trunk's lean). A gate added since (pitched: only within 0.5 m and under 10 cm) cuts them by 85% on the same recording, but all 2 080 left are still false (none within 12 cm of a toy, from the true pose). **Not usable yet; off** |
 | Flat 2-D worlds, 5 rooms incl. the dining room, homing after 240 s of walking (`[home]`, stuck detector on) | Gets back to where it started? | Fresh seeds 30–39: **arrived 100/100**, usually in 10–60 s; **0 contacts while homing** (3 contacts in the first 240 s, the same with homing off). Odometry is perfect here: in the full simulator home is only as good as the odometry |
 | Flat 2-D worlds, a dining room with 28 table and chair legs of 3 cm, body 11 cm wide | Head scan off vs. on (±25°, 2.5 s), 30 runs × 600 s each | Contacts with legs **2 → 0** (at 12 cm: 3 → 1 in 15 runs); area +5–15%; but 2–4× more full stops, since it now sees what it used to brush past |
 | Full simulator, cloud container, head scan on, 300 s | Does the policy keep its balance, does the sensor turn? | 0 falls; measured head yaw −27°…+29° for ±25° commanded, 0.3 s behind, 4° rms; replay exact |
@@ -120,10 +121,13 @@ These came out of measuring rather than assuming, and each one changed the desig
    every small steer instead kept a robot circling a room for ever, wall to wall); and a stuck
    detector for a robot pressing on a leg the sensor reads as nothing, closer than its shortest
    range — it turns away from what is nearest beside it, all the way round.
-9. **Looking down needs the whole pose.** Pitching the head 20° brings the 7 cm cube into view
+9. **Looking down needs the whole pose, and is not enough.** Pitching the head 20° brings the 7 cm cube into view
    from 20 cm, but with the old arithmetic the upper rows, now seeing the floor, read it as a wall
    in every frame. With the head allowed to pitch, every return is placed with the sensor's full
-   pose and a return that lands on the floor is floor, whatever row it is in.
+   pose and a return that lands on the floor is floor, whatever row it is in. That made it right on
+   the MuJoCo test frames (open floor, one object) and wrong in the apartment: there, pitched, the
+   floor model is off by enough at a grazing angle that furniture and wall feet read as low objects
+   by the hundred. Measured with the true pose and the toys' positions: none of them was a toy.
 
 ## How it works
 
