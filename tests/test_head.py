@@ -219,3 +219,16 @@ def test_pitch_replays_exactly_and_old_recordings_still_do(tmp_path):
     rec.close()
     assert r.contacts == 0
     assert replay(path, cfg).differing == 0
+
+
+def test_pitched_head_facing_a_wall_does_not_call_it_a_low_object():
+    """Regression: pitched 20 deg, even the top row meets the floor ~7 m out, so a wall it sees was
+    once a 'low object' (thousands a run in the 2-D worlds). Height of the point decides now."""
+    from microduck_brain.depth import geometry, low_obstacles
+
+    cfg = from_dict(PITCH)
+    w = world2d.World("wall", world2d.box(0, 0, 4, 4), (1, 1, 0))
+    for dist in (0.4, 0.6, 1.0, 2.0):
+        f = w.render(4 - dist - world2d.SENSOR_FORWARD, 2.0, 0.0, 0.0, 0.35)
+        pose = world2d._pose(0.0, 0.35)
+        assert low_obstacles(f, pose, cfg, geometry(pose, cfg)) == []

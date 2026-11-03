@@ -400,29 +400,35 @@ def low_obstacles(frame: DepthFrame, pose: Pose | None, cfg, geom: Geometry | No
 # a real sensor would see the step, i.e. a longer range. Both count.
 
 
+LOW_MAX_HEIGHT = 0.15    # pitched head: a return higher than this above the floor is a wall, not a low object
+
+
 def _low_tilted(frame: DepthFrame, cfg, geom: Geometry) -> list[LowObstacle]:
+    """Pitched head: a low object is a return short of the floor whose point is within
+    LOW_MAX_HEIGHT of the floor, with no taller return straight above it (at about the same
+    horizontal distance: then it is the foot of a wall). Pitched, even the top row can meet the
+    floor several metres out, so "which row" says nothing; the point's height does."""
     lo, o = cfg.low, cfg.obstacle
     out = []
     for c in range(8):
-        above = math.inf                     # nearest real obstacle in the rows above, this column
+        above = math.inf                     # horizontal distance of the nearest tall return above, this column
         for r in range(8):
             i = r * 8 + c
             d = frame.zone(r, c, o.max_range)
             if d is None or d >= o.max_range:
                 continue
-            exp_near = geom.floor.expected(i, geom.tilt)
             if geom.not_an_obstacle(i, d):
                 continue                     # floor (or further)
-            if not math.isfinite(exp_near):
-                above = min(above, d)        # a beam that never meets the floor: a wall return
-                continue
             vx, vy, _ = geom.beams[i]
-            if above < d + lo.wall_margin or d * vx < lo.min_range:
-                above = min(above, d)
+            horiz = d * math.hypot(vx, vy)
+            height = geom.floor.height - d * geom.floor.down_sin[i]
+            if height > LOW_MAX_HEIGHT:
+                above = min(above, horiz)    # a wall or furniture: tall
+                continue
+            if above < horiz + lo.wall_margin or d * vx < lo.min_range:
                 continue                     # the foot of a wall / phantom returns close in
             exp_nom = geom.floor.expected(i, 0.0)
             out.append(LowObstacle(r, c, d, d * vx, d * vy, d / exp_nom if math.isfinite(exp_nom) else 0.0))
-            above = min(above, d)
     return out
 
 
