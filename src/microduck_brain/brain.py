@@ -200,6 +200,10 @@ class Forward(State):
                      f"{view.left_free if side > 0 else view.right_free:.2f} m"
         elif inputs.now < brain.side_busy_until[side]:
             reason = f"something beside the body on the {'left' if side > 0 else 'right'}"
+        elif brain.explorer.wall_beside(inputs.pos, brain.yaw, side):
+            reason = f"a mapped wall beside the body on the {'left' if side > 0 else 'right'}"
+        elif brain.explorer.wall_on_course(inputs.pos, brain.yaw + bend, brain.cfg.obstacle.corridor_half_width):
+            reason = "a mapped wall on the new course"
         if reason:
             brain.stats.bends_refused += 1
             brain.explore_event(inputs.now, "refused", bend, reason)
@@ -225,6 +229,10 @@ class Forward(State):
             brain.heading_target = brain.yaw
             brain.heading_integral = 0.0
             brain.end_bend(now, "aborted", f"something beside the body on the {'left' if err > 0 else 'right'}")
+        elif brain._pos is not None and brain.explorer.wall_beside(brain._pos, brain.yaw, 1.0 if err > 0 else -1.0):
+            brain.heading_target = brain.yaw
+            brain.heading_integral = 0.0
+            brain.end_bend(now, "aborted", f"a mapped wall beside the body on the {'left' if err > 0 else 'right'}")
 
     @staticmethod
     def _start_episode(brain, view) -> None:
@@ -465,6 +473,8 @@ class Brain:
         self._pos = inputs.pos
         if self.cfg.explore.enabled and inputs.safe:
             self.explorer.update(inputs.pos, inputs.now)
+            sx = inputs.pose.sensor_pos[0] if inputs.pose else self.cfg.low.nominal_sensor_forward
+            self.explorer.update_walls(inputs.frame, inputs.pos, self.yaw, sx, self.cfg.obstacle)
             self.mark_busy_sides(inputs.now)
 
         if not self._started:

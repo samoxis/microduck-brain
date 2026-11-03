@@ -36,6 +36,48 @@ def test_unvisited_direction_is_more_novel_than_the_visited_one():
     assert e.novelty(here, 0.0, math.pi / 2) == 1.0         # never been there
 
 
+def wall_frame(d=0.6):
+    """A frame whose wall rows all see a wall at ``d`` m."""
+    from .test_brain import frame
+    return frame(lambda r, c: d if r <= 4 else 4.0)
+
+
+def test_cells_behind_a_wall_are_not_novel():
+    from microduck_brain.config import Obstacle
+
+    e = Explorer(from_dict(ON))
+    assert e.novelty((0.0, 0.0), 0.0, 0.0) == 1.0          # nothing known: all novel
+    e.update_walls(wall_frame(0.6), (0.0, 0.0), 0.0, 0.064, Obstacle())
+    assert e.blocked_cells > 0
+    # The wall is ~0.66 m ahead: only the 0.5 m probe is in front of it.
+    assert e.novelty((0.0, 0.0), 0.0, 0.0) <= 1 / 7 + 1e-9
+    assert e.novelty((0.0, 0.0), 0.0, math.pi) == 1.0        # behind the robot: still open
+
+
+def test_a_wall_frame_is_mapped_once():
+    from microduck_brain.config import Obstacle
+
+    e = Explorer(from_dict(ON))
+    f = wall_frame(0.6)
+    e.update_walls(f, (0.0, 0.0), 0.0, 0.064, Obstacle())
+    n = e.blocked_cells
+    e.update_walls(f, (5.0, 5.0), 1.0, 0.064, Obstacle())     # same frame object: ignored
+    assert e.blocked_cells == n
+    e.forget()
+    assert e.blocked_cells == 0
+
+
+def test_wall_beside_and_on_course():
+    e = Explorer(from_dict(ON))
+    e._blocked[e._cell(0.1, -0.3)] = 0.0                      # beside the right leg
+    assert e.wall_beside((0.0, 0.0), 0.0, -1.0)
+    assert not e.wall_beside((0.0, 0.0), 0.0, 1.0)
+    e2 = Explorer(from_dict(ON))
+    e2._blocked[e2._cell(0.0, -0.5)] = 0.0                    # 0.5 m to the right
+    assert e2.wall_on_course((0.0, 0.0), -math.pi / 2, 0.14)  # turning right walks into it
+    assert not e2.wall_on_course((0.0, 0.0), 0.0, 0.14)       # straight ahead is clear
+
+
 def test_side_novelty_prefers_the_side_not_walked():
     # A trail to the left of the robot (y > 0), none to the right.
     trail = [(x / 10, y / 10) for x in range(-20, 21) for y in range(3, 20, 2)]

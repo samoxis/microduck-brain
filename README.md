@@ -42,9 +42,10 @@ from the robot's own odometry. The recording is in [`docs/`](docs/) and replays 
 | MuJoCo apartment, kinematic body, real ToF model ([`tools/kinematic_apartment.py`](tools/kinematic_apartment.py); one run drawn in [`docs/apartment-run.svg`](docs/apartment-run.svg)) | 12 runs × 300 s from 6 rooms, two real turn rates: 334 m walked | **0 toy contacts, 0 entries over the stairwell**, 2 grazes of furniture (down from 22, see *Findings*), 791 avoidances |
 | Real MuJoCo sensor frames ([`tests/fixtures/`](tests/fixtures/)) | Floor model vs. the simulated sensor | error σ 0.8% (max 2.8%) |
 | Real MuJoCo sensor frames | False alarms on empty floor, trunk tilted ±3° pitch and roll | **0** in 96 frames (low objects) and 0 in 304 frames (drops, incl. 64 frames across the apartment's rooms) |
-| Flat 2-D worlds, real beam geometry, measured real/commanded ratios ([`tests/world2d.py`](tests/world2d.py)) | Exploration on vs. off: 4 rooms × 10 seeds × 600 s, then 10 *new* seeds as a holdout | Area covered **+46%** on the holdout (30.2 vs 20.7 m² summed over the 4 rooms), **0 contacts** either way; not yet run in the full simulator |
+| Flat 2-D worlds, real beam geometry, measured real/commanded ratios ([`tests/world2d.py`](tests/world2d.py)) | Exploration on vs. off: 4 rooms × 30 seeds × 600 s | Area covered **+71%** (35.0 vs 20.5 m² summed over the 4 rooms, mean of 3 × 10 seeds), **0 contacts** in 120 runs either way |
 | Full simulator, official walking policies (run by the author), apartment, 600 s each | Exploration off vs. on, first version (3fedf98) | Area 7.31 vs 7.50 m² (+2.6%, within single-run noise); avoidances 194 vs 327; 3 bends but 27 "aborts" — a bug: the abort rule also reset the ordinary heading hold near walls. Fixed; to be re-measured |
-| Test suite | 192 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
+| Full simulator in a 4-core cloud container (`tools/ab_full_sim.sh`), 3 + 3 runs of 600 s, before the wall map | Exploration off vs. on | Area 6.42 ± 1.79 vs 7.94 ± 0.83 m²: ranges overlap, no signal at n = 3. The container is marginal: robotd's loop dipped below 45 Hz 1–3 times a run (reported as unhealthy, not falls) |
+| Test suite | 197 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
 
 **What has not been verified**: anything on a physical robot (the author doesn't have one yet). In
 the full-simulator run, contacts with furniture are not measured (the headless simulator doesn't report
@@ -97,7 +98,11 @@ These came out of measuring rather than assuming, and each one changed the desig
    with the walls known: 94% of all refusals pointed at a direction whose probed cells were *all*
    beyond a wall, and 82% were towards the side the nearest wall was on. "Unvisited" includes cells
    the robot can never reach; the side rule was refusing bends into walls, which is right, but it
-   means the novelty measure is wrong, not the side rule.
+   means the novelty measure is wrong, not the side rule. Now the wall returns are remembered as
+   blocked cells and a probe stops at the first one. That roughly doubled the bends that complete,
+   and the 2-D coverage went from +48% to +71%, with two more guards from the same map: no bend
+   towards a wall remembered beside the body, none onto a course with a wall within 0.75 m (a table
+   corner met head-on shows in a single zone, which the brain ignores as noise).
 
 ## How it works
 
@@ -185,7 +190,9 @@ cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtur
 - An object that was never seen from a distance (already under the lowest beam) cannot be detected;
   nor can a drop narrower than the blind zone ahead (~0.7 m) approached from the side without having
   been seen. Glass is invisible to the sensor.
-- After a fall the brain waits; it does not try to stand the robot up.
+- After a fall the brain waits; it does not try to stand the robot up. Pollen's stack has no
+  get-up policy (the policies are walk/stand, sit-stand, ground pick, kicks and the roulade), and a
+  brain can only ask for movements that exist; getting up needs a policy trained for it.
 - Exploration is measured only in flat 2-D worlds (ideal floor, no sway, perfect odometry). Its map is
   in odometry coordinates, so it drifts with the odometry, and it is forgotten after a fall.
 - The 45° field of view is narrow while turning (finding 6).
