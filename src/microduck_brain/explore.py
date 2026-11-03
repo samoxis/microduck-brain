@@ -110,6 +110,26 @@ class Explorer:
                     return True
         return False
 
+    def nearest_beside(self, pos, yaw: float, reach: float = 0.45) -> float | None:
+        """Lateral offset (m, + = left) of the nearest remembered wall cell beside the trunk, from a
+        little behind to a little ahead; None if there is none."""
+        cs = self.cfg.cell
+        n = int(math.ceil(reach / cs)) + 1
+        cx, cy = self._cell(*pos)
+        c, s = math.cos(yaw), math.sin(yaw)
+        best = None
+        for i in range(cx - n, cx + n + 1):
+            for j in range(cy - n, cy + n + 1):
+                if (i, j) not in self._blocked:
+                    continue
+                dx, dy = (i + 0.5) * cs - pos[0], (j + 0.5) * cs - pos[1]
+                fwd, lat = c * dx + s * dy, -s * dx + c * dy
+                if -0.2 < fwd < 0.5 and abs(lat) < reach:
+                    d = math.hypot(fwd, lat)
+                    if best is None or d < best[0]:
+                        best = (d, lat)
+        return None if best is None else best[1]
+
     def wall_on_course(self, pos, heading: float, half_width: float, reach: float = 0.75) -> bool:
         """A remembered wall cell in the body's corridor along ``heading``, within ``reach``: a bend
         onto that course would walk into something the sensor may see with a single zone only (the

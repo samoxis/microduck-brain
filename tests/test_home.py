@@ -65,3 +65,55 @@ def test_goes_home_in_the_living_room_without_touching_anything():
     w = world2d.worlds()[3]
     r = world2d.run(w, cfg, 360, 0)
     assert r.stats.home_started == 1 and r.stats.home_arrived == 1 and r.contacts == 0
+
+
+def test_plan_keeps_clear_of_walls_when_it_can():
+    visited = {(x, y) for x in range(6) for y in range(3)}
+    blocked = {(3, 0)}                                          # a chair leg in the bottom row
+    path = plan(visited, blocked, (0, 0), (5, 0))
+    near = {(3 + dx, 0 + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
+    assert not set(path[1:-1]) & near                           # goes round, one cell clear
+    # No clear way: it still finds the tight one.
+    tight = {(x, 0) for x in range(6)} | {(x, 1) for x in range(6)}
+    assert plan(tight, {(3, 1)}, (0, 0), (5, 0)) is not None
+
+
+def test_stuck_detector_stops_and_turns_away_from_what_is_beside():
+    from microduck_brain.hazards import SIDE, Hazard
+
+    cfg = from_dict({"obstacle": {"stuck_seconds": 2.0}, "safety": {"resume_delay": 0.2}})
+    b = Brain(cfg)
+    t = 0.0
+    while t < 1.0:
+        b.tick(Inputs(t, clear(), True, "", 0.0, None, (0.0, 0.0)))
+        t += 0.05
+    assert b.state_name == "forward"
+    orig = b.hazards.update
+
+    def update(*args, **kwargs):                                # something beside the right leg
+        orig(*args, **kwargs)
+        b.hazards.items = [Hazard(0.1, -0.2, SIDE)]   # outside the corridor: not "ahead"
+        return b.hazards.items
+
+    b.hazards.update = update
+    states = []
+    while t < 4.0:                                              # walking, but the odometry is frozen
+        b.tick(Inputs(t, clear(), True, "", 0.0, None, (0.0, 0.0)))
+        states.append(b.state_name)
+        t += 0.05
+    assert b.stats.stuck == 1 and "bigturn" in states and b.turn_sign == 1.0   # away: to the left
+
+
+def test_stuck_detector_is_off_by_default():
+    b = Brain(from_dict({"safety": {"resume_delay": 0.2}}))
+    for i in range(200):
+        b.tick(Inputs(i * 0.05, clear(), True, "", 0.0, None, (0.0, 0.0)))
+    assert b.stats.stuck == 0 and b.state_name == "forward"
+
+
+def test_homing_in_the_dining_room_from_a_wedged_start():
+    """The case that once alternated for ever between avoiding a table leg and turning back to it:
+    seed 28 of the 2-D dining room (65 contacts before the fixes)."""
+    cfg = from_dict({"home": {"enabled": True, "after_seconds": 240.0}, "obstacle": {"stuck_seconds": 4.0}})
+    r = world2d.run(world2d.chair_legs(), cfg, 600, 28)
+    assert r.stats.home_arrived == 1 and r.contacts <= 1

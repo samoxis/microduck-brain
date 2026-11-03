@@ -44,6 +44,7 @@ class Obstacle:
     corridor_half_width: float = 0.14
     sensor_lateral: float = 0.0224
     side_memory_seconds: float = 3.0
+    stuck_seconds: float = 0.0
 
 
 @dataclass
@@ -132,6 +133,7 @@ class Home:
     lookahead_cells: int = 3
     face_threshold_deg: float = 60.0
     replan_every: float = 1.0
+    yield_seconds: float = 4.0
 
 
 @dataclass
@@ -187,6 +189,8 @@ class Config:
             raise ValueError("obstacle: slow_distance must be >= stop_distance")
         if o.steer_yaw_max < 0 or o.steer_slew <= 0 or o.min_turn_degrees < 0:
             raise ValueError("obstacle: steer_yaw_max >= 0, steer_slew > 0, min_turn_degrees >= 0")
+        if o.stuck_seconds < 0:
+            raise ValueError("obstacle: stuck_seconds >= 0")
         if o.corridor_half_width <= 0 or o.side_memory_seconds < 0:
             raise ValueError("obstacle: corridor_half_width > 0, side_memory_seconds >= 0")
         if o.low_obstacles not in ("avoid", "ignore"):
@@ -224,8 +228,9 @@ class Config:
         if not 0 <= hd.amplitude_deg <= 60 or hd.period <= 0 or hd.side_free_seconds < 0:
             raise ValueError("head: amplitude_deg in [0, 60], period > 0, side_free_seconds >= 0")
         hm = self.home
-        if hm.after_seconds < 0 or hm.arrive_radius <= 0 or hm.lookahead_cells < 1 or hm.replan_every <= 0:
-            raise ValueError("home: after_seconds >= 0, arrive_radius > 0, lookahead_cells >= 1, replan_every > 0")
+        if hm.after_seconds < 0 or hm.arrive_radius <= 0 or hm.lookahead_cells < 1 or hm.replan_every <= 0 \
+                or hm.yield_seconds < 0:
+            raise ValueError("home: after_seconds >= 0, arrive_radius > 0, lookahead_cells >= 1, replan_every > 0, yield_seconds >= 0")
         if not 10 <= hm.face_threshold_deg <= 180:
             raise ValueError("home: face_threshold_deg in [10, 180]")
         rc = self.recover

@@ -20,10 +20,18 @@ from collections import deque
 STEPS = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]
 
 
-def plan(visited, blocked, start: tuple[int, int], goal: tuple[int, int], max_cells: int = 20000):
+def plan(visited, blocked, start: tuple[int, int], goal: tuple[int, int], max_cells: int = 20000,
+         clearance: bool = True):
     """Shortest 8-connected path of cells from ``start`` to ``goal`` through ``visited`` cells,
     avoiding ``blocked`` ones; None if there is none. Breadth-first, with diagonal steps costing the
-    same as straight ones (good enough at this scale)."""
+    same as straight ones (good enough at this scale). With ``clearance``, cells next to a blocked one
+    are avoided too, unless that leaves no way at all: a path along the centres of 25 cm cells next
+    to a chair leg passes within a body's width of it."""
+    if clearance:
+        near = {(c[0] + dx, c[1] + dy) for c in blocked for dx, dy in STEPS}
+        path = plan(visited, set(blocked) | (near - {start, goal}), start, goal, max_cells, clearance=False)
+        if path is not None:
+            return path
     if start == goal:
         return [start]
 
@@ -63,6 +71,8 @@ class Homing:
         self.since = 0.0
         self.waypoint: tuple[float, float] | None = None
         self._planned_at = -1e9
+        self.suspended_until = -1e9      # homing gives way to an avoidance until then
+        self.yield_pending = False       # a stop happened: suspend once it walks again
 
     def distance(self, pos) -> float | None:
         if self.home is None or pos is None:

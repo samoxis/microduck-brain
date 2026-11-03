@@ -128,6 +128,7 @@ class Result:
     distance: float = 0.0
     cells: set = field(default_factory=set)
     contacts: int = 0
+    contact_times: list = field(default_factory=list)
     stats: object = None
     bend_open: bool = False
 
@@ -192,6 +193,7 @@ def run(world: World, cfg: Config, seconds: float = 300.0, seed: int = 0, drift:
                 touching = False
             elif not touching:
                 res.contacts += 1
+                res.contact_times.append(t)
                 touching = True
         res.cells.add((math.floor(x / 0.25), math.floor(y / 0.25)))
         t += dt

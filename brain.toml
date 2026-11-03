@@ -28,6 +28,7 @@ last_row = 4              # they are handled separately, as low objects and drop
 corridor_half_width = 0.14 # "ahead" = any wall return within this of the robot's axis (m): the body's swept width + margin
 sensor_lateral = 0.0224   # the sensor sits this far left of the robot's axis (m; MJCF `tof` site)
 side_memory_seconds = 3.0 # remember wall returns near the body for this long: a chair leg leaves the field of view ~30 cm before passing the leg
+stuck_seconds = 0.0       # walking this long without the odometry moving 5 cm => stop and turn (0 = off; 4 is a good value)
 front_first_col = 1       # central columns used to decide whether the sensor is blind (0 = the sensor's left)
 front_last_col = 6
 min_zones = 2             # how many zones must be close for it to count (rejects single-zone noise)
@@ -116,6 +117,7 @@ arrive_radius = 0.35      # home is reached within this (m)
 lookahead_cells = 3       # steer towards the path cell this many cells ahead
 face_threshold_deg = 60.0 # the way home this far off the heading: stop and turn to face it first
 replan_every = 1.0        # re-plan the path this often (s)
+yield_seconds = 4.0       # after any avoidance, stop steering for home this long: the avoidance first
 
 [recover]
 # A robot that stays down (robotd gets it up after most falls, but not from lying on its side, and

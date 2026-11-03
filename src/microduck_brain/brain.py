@@ -82,10 +82,12 @@ class Stats:
     bends_interrupted: int = 0    # ... ended by an obstacle ahead (the avoidance takes over)
     bends_aborted: int = 0        # ... cancelled: something came beside the body on that side
     bends_refused: int = 0        # a more novel direction existed, but the bend was not started (see the log)
+    stuck: int = 0                # walking without moving for obstacle.stuck_seconds: stopped and turned
     home_started: int = 0         # home.py: homing started (after home.after_seconds of walking)
     home_arrived: int = 0         # ... and reached home
     home_aborted: int = 0         # ... and given up (a fall: the odometry can't be trusted)
     home_seconds: float = 0.0     # how long the way home took
+    home_waits: int = 0           # ticks it held its heading: something beside the body on the turning side
     recovery_attempts: int = 0    # recover.py: sequences started (stop policy, init, start policy)
     recoveries_ok: int = 0        # ... after which the robot was safe again
     novel_turns: int = 0          # exploration: turned towards the less visited side (both about equally free)
@@ -164,6 +166,10 @@ class Forward(State):
         self._last = inputs.now
         self._yaw_cmd = 0.0
         self._straight = False
+        self._progress = (inputs.now, inputs.pos)      # stuck detection: where and when it last moved
+        if brain.homing.yield_pending:
+            brain.homing.yield_pending = False
+            brain.homing.suspended_until = inputs.now + brain.cfg.home.yield_seconds
 
     def step(self, brain, inputs):
         cfg = brain.cfg
@@ -171,9 +177,21 @@ class Forward(State):
         self._last = inputs.now
         view = brain.look(inputs)
 
+        if self._stuck(brain, inputs):
+            # Walking, but the odometry hasn't moved: pressed against something the sensor can't
+            # see (a chair leg closer than its shortest range reads as nothing at all).
+            self._start_episode(brain, view)
+            self._yield_home(brain)
+            brain.stuck_turn = brain.away_from_beside(inputs)
+            brain.stats.stuck += 1
+            brain.stats.brakes += 1
+            brain.consecutive_avoids += 1
+            return STOP, "brake"
+
         if view.blocked:
             # No room left: stop completely.
             self._start_episode(brain, view)
+            self._yield_home(brain)
             brain.stats.brakes += 1
             brain.consecutive_avoids += 1
             return STOP, "brake"
@@ -208,6 +226,16 @@ class Forward(State):
         self._yaw_cmd += max(-step, min(step, target - self._yaw_cmd))
         return move(cfg.motion.forward_speed, self._yaw_cmd), None
 
+    def _stuck(self, brain, inputs) -> bool:
+        limit = brain.cfg.obstacle.stuck_seconds
+        if limit <= 0 or inputs.pos is None:
+            return False
+        t0, p0 = self._progress
+        if p0 is None or math.hypot(inputs.pos[0] - p0[0], inputs.pos[1] - p0[1]) >= 0.05:
+            self._progress = (inputs.now, inputs.pos)
+            return False
+        return inputs.now - t0 >= limit
+
     @staticmethod
     def _home_heading(brain, inputs):
         """Homing: arrived -> stop; the way home far off the heading -> turn to face it in place;
@@ -218,11 +246,21 @@ class Forward(State):
             brain.stats.home_arrived += 1
             brain.stats.home_seconds = inputs.now - h.since
             return STOP, "home"
+        if inputs.now < h.suspended_until:
+            return None             # just avoided something: let the avoidance carry it clear first
         b = h.bearing(brain.explorer, inputs.pos, inputs.now)
         err = (b - brain.yaw + math.pi) % (2 * math.pi) - math.pi
         if abs(err) > math.radians(brain.cfg.home.face_threshold_deg):
             brain.face_target = brain.yaw + err
             return move(0.0, 0.0), "face"
+        side = 1.0 if err > 0 else -1.0
+        if abs(err) > 0.1 and (inputs.now < brain.side_busy_until[side]
+                               or brain.explorer.wall_beside(inputs.pos, brain.yaw, side)):
+            # Something beside the body on the side the way home turns to (the 45 deg view doesn't
+            # see beside the legs): keep going straight until it is behind.
+            brain.heading_target = brain.yaw
+            brain.stats.home_waits += 1
+            return None
         if brain.heading_target is None or abs(brain.yaw + err - brain.heading_target) > 0.05:
             brain.heading_target = brain.yaw + err
         return None
@@ -282,6 +320,15 @@ class Forward(State):
             brain.end_bend(now, "aborted", f"a mapped wall beside the body on the {'left' if err > 0 else 'right'}")
 
     @staticmethod
+    def _yield_home(brain) -> None:
+        """Homing gives way after a full stop: without this, the way home turns the robot straight back
+        into what it stopped for, and the two alternate for ever (a robot wedged between a table leg
+        and a chair leg, in the 2-D dining room). Only after a stop: steering past a wall happens all
+        the time along a wall, and yielding to it kept a robot circling a room for ever."""
+        if brain.homing.active:
+            brain.homing.yield_pending = True   # counted from when it walks again (Forward.enter)
+
+    @staticmethod
     def _start_episode(brain, view) -> None:
         if not brain.episode_open:
             brain.episode_open = True
@@ -314,6 +361,13 @@ class Brake(State):
             return move(0.0, 0.0), None
         view = brain.look(inputs)
         brain.turn_sign = brain.pick_turn(view, brain.cfg.explore.turn_margin)
+        if brain.stuck_turn is not None:
+            # Stuck against something beside the body: turn away from it, all the way round. A short
+            # turn towards it (whatever the view ahead said) left the body touching it.
+            brain.turn_sign, brain.stuck_turn = brain.stuck_turn, None
+            brain.steer_sign = brain.turn_sign
+            brain.stats.big_turns += 1
+            return move(0.0, 0.0), "bigturn"
         brain.steer_sign = brain.turn_sign
         if brain.consecutive_avoids >= brain.cfg.corner.turns_before_big_turn:
             brain.consecutive_avoids = 0
@@ -437,6 +491,7 @@ class Brain:
         self.recovery = Recovery(cfg)
         self.homing = Homing(cfg)
         self.face_target: float | None = None
+        self.stuck_turn: float | None = None   # after getting stuck: turn this way (+1 left), all the way
         self.explorer = Explorer(cfg)
         self.last_bend_check = -1e9      # exploration: when a bend was last considered (any state)
         self.side_busy_until = {1.0: -1e9, -1.0: -1e9}   # exploration: no bends towards that side until then
@@ -473,6 +528,22 @@ class Brain:
         else:
             self.stats.bends_aborted += 1
         self.explore_event(now, how, angle, reason)
+
+    def away_from_beside(self, inputs: Inputs) -> float | None:
+        """+1 (turn left) / -1 (right) away from what is nearest beside the body (side memory, then
+        the wall map); None if nothing is known there."""
+        best = None
+        for h in self.hazards.items:
+            if h.kind == SIDE and -0.15 < h.forward < 0.6 and abs(h.lateral) < 0.35:
+                if best is None or abs(h.lateral) < abs(best):
+                    best = h.lateral
+        if best is not None:
+            return -1.0 if best >= 0 else 1.0
+        if inputs.pos is not None and self.yaw is not None:
+            lat = self.explorer.nearest_beside(inputs.pos, self.yaw)
+            if lat is not None:
+                return -1.0 if lat >= 0 else 1.0
+        return None
 
     def mark_busy_sides(self, now: float) -> None:
         """Exploration: a side with something near the body (side memory) gets no bends for a while."""
