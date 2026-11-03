@@ -121,6 +121,8 @@ side_choices                     0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0
 real-time checks at >= 1.00x: 10
 ```
 
+Repeated at the same commit, run folders kept ([`docs/ab/head-scan-3b323ee-rerun.txt`](docs/ab/head-scan-3b323ee-rerun.txt)): area 8.02 ± 1.44 vs 5.29 ± 1.39 m², avoidances 361 vs 406. Each time the ranges overlap (noise), but both times the scan covered less (−22%, −34%): not a signal, and nothing in its favour either.
+
 **Head pitch off vs. on, 3 + 3 runs, contacts and true pose logged** ([`docs/ab/head-pitch-59b7f5d.txt`](docs/ab/head-pitch-59b7f5d.txt))
 
 ```text
