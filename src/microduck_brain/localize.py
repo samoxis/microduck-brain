@@ -30,10 +30,14 @@ class Localizer:
 
     def reset(self) -> None:
         self.dx = self.dy = self.dyaw = 0.0
-        self._map: dict[tuple[int, int], float] = {}   # cell -> when first seen
+        # cell -> [first seen, sum x, sum y, n]: distances are measured to the mean of the actual wall
+        # points in a cell, not to its centre (that rewarded snapping points to the grid: with good
+        # odometry, every "correction" made it worse)
+        self._map: dict[tuple[int, int], list] = {}
         self._last_frame: object = None
         self._frames = 0
         self.corrections = 0
+        self._prev: tuple[float, float] | None = None   # (t, yaw) of the last tick, for the turn rate
 
     # --- the correction ------------------------------------------------------------
     def correct(self, pos, yaw):
@@ -78,9 +82,9 @@ class Localizer:
             best = CAP
             for i in range(kx - 2, kx + 3):
                 for j in range(ky - 2, ky + 3):
-                    t = self._map.get((i, j))
-                    if t is not None and t <= old:
-                        d = math.hypot((i + 0.5) * CELL - wx, (j + 0.5) * CELL - wy)
+                    m = self._map.get((i, j))
+                    if m is not None and m[0] <= old:
+                        d = math.hypot(m[1] / m[3] - wx, m[2] / m[3] - wy)
                         if d < best:
                             best = d
             total += best
@@ -90,7 +94,17 @@ class Localizer:
 
     def update(self, frame, pos, yaw, sensor_forward: float, now: float, head: float = 0.0) -> None:
         """Match a new frame (every ``every`` frames), then add its walls to the map."""
-        if not self.cfg.enabled or frame is None or frame is self._last_frame or pos is None or yaw is None:
+        if not self.cfg.enabled or pos is None or yaw is None:
+            return
+        prev, self._prev = self._prev, (now, yaw)
+        if prev is not None and now > prev[0]:
+            rate = abs((yaw - prev[1] + math.pi) % (2 * math.pi) - math.pi) / (now - prev[0])
+            if rate > self.cfg.max_turn_rate:
+                # Turning: the frame is up to a frame period older than the pose, so its walls come
+                # out rotated by several degrees: neither matched nor drawn.
+                self._last_frame = frame
+                return
+        if frame is None or frame is self._last_frame:
             return
         self._last_frame = frame
         self._frames += 1
@@ -125,8 +139,14 @@ class Localizer:
                     (px, py), cyaw = self.correct(pos, yaw)
         c, s = math.cos(cyaw), math.sin(cyaw)
         for fx, fy in pts:
-            k = self._key(px + c * fx - s * fy, py + s * fx + c * fy)
-            if k not in self._map:
-                self._map[k] = now
+            wx, wy = px + c * fx - s * fy, py + s * fx + c * fy
+            k = self._key(wx, wy)
+            m = self._map.get(k)
+            if m is None:
+                self._map[k] = [now, wx, wy, 1]
                 if len(self._map) > MAX_CELLS:
                     self._map.pop(next(iter(self._map)))
+            elif m[3] < 50:
+                m[1] += wx
+                m[2] += wy
+                m[3] += 1

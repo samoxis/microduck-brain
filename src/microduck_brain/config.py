@@ -143,11 +143,12 @@ class Localize:
     enabled: bool = False
     every: int = 3
     min_points: int = 12
-    min_gain_m: float = 0.006
-    min_gain_rel: float = 0.2
+    min_gain_m: float = 0.012
+    min_gain_rel: float = 0.35
     min_age: float = 20.0
     search_step: float = 0.04
     search_turn_deg: float = 1.5
+    max_turn_rate: float = 0.05
 
 
 @dataclass
