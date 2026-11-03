@@ -46,11 +46,13 @@ from the robot's own odometry. The recording is in [`docs/`](docs/) and replays 
 | Real MuJoCo sensor frames | False alarms on empty floor, trunk tilted ±3° pitch and roll | **0** in 96 frames (low objects) and 0 in 304 frames (drops, incl. 64 frames across the apartment's rooms) |
 | Flat 2-D worlds, real beam geometry, measured real/commanded ratios ([`tests/world2d.py`](tests/world2d.py)) | Exploration on vs. off: 4 rooms × 30 seeds × 600 s | Area covered **+71%** (35.0 vs 20.5 m² summed over the 4 rooms, mean of 3 × 10 seeds), **0 contacts** in 120 runs either way |
 | Full simulator, official walking policies (run by the author), apartment, 600 s each | Exploration off vs. on, first version (3fedf98) | Area 7.31 vs 7.50 m² (+2.6%, within single-run noise); avoidances 194 vs 327; 3 bends but 27 "aborts" — a bug: the abort rule also reset the ordinary heading hold near walls. Fixed; to be re-measured |
-| Full simulator in a 4-core cloud container (`tools/ab_full_sim.sh`), 3 + 3 runs of 600 s, before the wall map | Exploration off vs. on | Area 6.42 ± 1.79 vs 7.94 ± 0.83 m²: ranges overlap, no signal at n = 3. The container is marginal: robotd's loop dipped below 45 Hz 1–3 times a run (reported as unhealthy, not falls) |
+| Full simulator in a 4-core cloud container (`tools/ab_full_sim.sh`), apartment, 5 + 5 runs of 600 s alternating, frozen commit `0f9f816` | Exploration off vs. on | Area 7.04 ± 1.05 vs 7.74 ± 1.40 m² (5.25–8.06 vs 5.56–9.06): **noise**, the ranges overlap; avoidances 396 vs 388, noise; 0 falls. Why: 0.4 bends a run (2-D: ~20), because 43 of 45 attempts were refused — something beside the body (the apartment is cramped for a 10 cm/s robot) |
+| Real MuJoCo frames, head pitched down with robot.head (`tests/fixtures/mujoco_head_pitch.json`) | Where a 7 cm cube is seen, and false alarms on empty floor | Level head: from 0.50 m. Pitched 20°: **from 0.20 m, no gap to 0.60 m**; 28.6°: from 0.16 m. 0 alarms in 48 empty-floor frames (the level-head arithmetic, unaware of the pitch, reads the floor as a wall in all 24 frames at ≥ 20°) |
+| Flat 2-D worlds, 5 rooms incl. the dining room, homing after 240 s of walking (`[home]`, stuck detector on) | Gets back to where it started? | Fresh seeds 30–39: **arrived 100/100**, usually in 10–60 s; **0 contacts while homing** (3 contacts in the first 240 s, the same with homing off). Odometry is perfect here: in the full simulator home is only as good as the odometry |
 | Flat 2-D worlds, a dining room with 28 table and chair legs of 3 cm, body 11 cm wide | Head scan off vs. on (±25°, 2.5 s), 30 runs × 600 s each | Contacts with legs **2 → 0** (at 12 cm: 3 → 1 in 15 runs); area +5–15%; but 2–4× more full stops, since it now sees what it used to brush past |
 | Full simulator, cloud container, head scan on, 300 s | Does the policy keep its balance, does the sensor turn? | 0 falls; measured head yaw −27°…+29° for ±25° commanded, 0.3 s behind, 4° rms; replay exact |
 | Full simulator, cloud container (`tools/push/push_trials.sh`) | Shoved sideways, ±1–3 m/s, 10 trials from a fresh simulator | Fell every time; **got up by itself 9 of 10** (2.0–2.8 s), once stuck on its side. With the brain running: walking again 4 s after the shove |
-| Test suite | 207 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
+| Test suite | 229 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
 
 **What has not been verified**: anything on a physical robot (the author doesn't have one yet). In
 the full-simulator run, contacts with furniture are not measured (the headless simulator doesn't report
@@ -108,6 +110,18 @@ These came out of measuring rather than assuming, and each one changed the desig
    and the 2-D coverage went from +48% to +71%, with two more guards from the same map: no bend
    towards a wall remembered beside the body, none onto a course with a wall within 0.75 m (a table
    corner met head-on shows in a single zone, which the brain ignores as noise).
+
+8. **Homing fought the avoidance.** The first version of going home, in the 2-D dining room, had a
+   robot wedged between a table leg and a chair leg turn away (the avoidance), turn back towards
+   home (the homing), and again, 65 times. Three fixes, each traced: plan a cell clear of remembered
+   walls; after a full stop, homing gives way for 4 s counted from when it walks again (yielding to
+   every small steer instead kept a robot circling a room for ever, wall to wall); and a stuck
+   detector for a robot pressing on a leg the sensor reads as nothing, closer than its shortest
+   range — it turns away from what is nearest beside it, all the way round.
+9. **Looking down needs the whole pose.** Pitching the head 20° brings the 7 cm cube into view
+   from 20 cm, but with the old arithmetic the upper rows, now seeing the floor, read it as a wall
+   in every frame. With the head allowed to pitch, every return is placed with the sensor's full
+   pose and a return that lands on the floor is floor, whatever row it is in.
 
 ## How it works
 
