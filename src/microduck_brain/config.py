@@ -137,6 +137,20 @@ class Home:
 
 
 @dataclass
+class Localize:
+    """Correct odometry drift against the walls seen before (see localize.py). Off by default."""
+
+    enabled: bool = False
+    every: int = 3
+    min_points: int = 12
+    min_gain_m: float = 0.006
+    min_gain_rel: float = 0.2
+    min_age: float = 20.0
+    search_step: float = 0.04
+    search_turn_deg: float = 1.5
+
+
+@dataclass
 class Recover:
     """Help a robot that stays down (see recover.py). Off by default."""
 
@@ -174,6 +188,7 @@ class Config:
     head: Head = field(default_factory=Head)
     recover: Recover = field(default_factory=Recover)
     home: Home = field(default_factory=Home)
+    localize: Localize = field(default_factory=Localize)
     safety: Safety = field(default_factory=Safety)
     loop: Loop = field(default_factory=Loop)
 
@@ -233,6 +248,10 @@ class Config:
             raise ValueError("home: after_seconds >= 0, arrive_radius > 0, lookahead_cells >= 1, replan_every > 0, yield_seconds >= 0")
         if not 10 <= hm.face_threshold_deg <= 180:
             raise ValueError("home: face_threshold_deg in [10, 180]")
+        lz = self.localize
+        if lz.every < 1 or lz.min_points < 1 or lz.min_gain_m <= 0 or lz.min_age < 0 or lz.search_step <= 0 \
+                or lz.search_turn_deg <= 0:
+            raise ValueError("localize: every, min_points >= 1; min_gain_m > 0; min_age >= 0; search_step, search_turn_deg > 0")
         rc = self.recover
         if rc.after_seconds < 0 or rc.init_seconds <= 0 or rc.verify_seconds <= 0 or rc.max_attempts < 1:
             raise ValueError("recover: after_seconds >= 0, init_seconds > 0, verify_seconds > 0, max_attempts >= 1")

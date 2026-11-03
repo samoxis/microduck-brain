@@ -131,6 +131,8 @@ class Result:
     contact_times: list = field(default_factory=list)
     stats: object = None
     bend_open: bool = False
+    odom_error: float = 0.0          # final distance between the odometry and the truth (m)
+    corrected_error: float = 0.0     # ... and between the corrected odometry and the truth
 
     @property
     def area(self) -> float:
@@ -151,14 +153,18 @@ def _pose(head: float, pitch: float = 0.0):
 
 def run(world: World, cfg: Config, seconds: float = 300.0, seed: int = 0, drift: float = 0.04,
         dt: float = 0.05, frame_every: int = 1, recorder=None, with_pose: bool = False,
-        body_radius: float = BODY_RADIUS) -> Result:
+        body_radius: float = BODY_RADIUS, odom_yaw_drift: float = 0.0, odom_scale: float = 1.0) -> Result:
     """Closed loop: frame -> brain -> plant. ``drift`` = the gait's yaw drift while walking (rad/s),
     randomised in sign and size per seed, like the real policy's. ``with_pose`` sends a sensor pose
-    (frames.tof) like the real robot does, including where the head looks; head scanning needs it."""
+    (frames.tof) like the real robot does, including where the head looks; head scanning needs it.
+    ``odom_yaw_drift`` (rad/s, sign random per seed) and ``odom_scale`` make the reported odometry
+    drift from the truth: its yaw gains that rate, its distances are scaled (default: perfect)."""
     rng = random.Random(seed)
     x, y, yaw = world.start
     yaw += rng.uniform(-0.5, 0.5)
     bias = drift * rng.uniform(0.5, 1.5) * rng.choice((-1, 1))
+    yaw_drift = odom_yaw_drift * rng.choice((-1, 1))
+    ox, oy, oyaw = x, y, yaw          # the odometry's belief
     brain = Brain(cfg)
     res = Result(world.name)
     t, n, frame = 0.0, 0, None
@@ -170,8 +176,8 @@ def run(world: World, cfg: Config, seconds: float = 300.0, seed: int = 0, drift:
             frame = world.render(x, y, yaw, head, pitch)
             pose = _pose(head, pitch) if with_pose else None
         n += 1
-        wyaw = (yaw + math.pi) % (2 * math.pi) - math.pi
-        inp = Inputs(t, frame, True, "", wyaw, pose, (x, y))
+        wyaw = (oyaw + math.pi) % (2 * math.pi) - math.pi
+        inp = Inputs(t, frame, True, "", wyaw, pose, (ox, oy))
         cmd = brain.tick(inp)
         if cmd.head_yaw is not None:
             head_cmd = cmd.head_yaw
@@ -186,9 +192,13 @@ def run(world: World, cfg: Config, seconds: float = 300.0, seed: int = 0, drift:
         if cmd.kind == "move":
             v = FORWARD_RATIO * cmd.vx
             yaw += (TURN_RATIO * cmd.vyaw + (bias if cmd.vx > 0 else 0.0)) * dt
+            dyaw = (TURN_RATIO * cmd.vyaw + (bias if cmd.vx > 0 else 0.0)) * dt
+            oyaw += dyaw + yaw_drift * dt
             nx, ny = x + v * math.cos(yaw) * dt, y + v * math.sin(yaw) * dt
             if world.clearance(nx, ny) >= body_radius:
                 res.distance += math.hypot(nx - x, ny - y)
+                step = math.hypot(nx - x, ny - y) * odom_scale
+                ox, oy = ox + step * math.cos(oyaw), oy + step * math.sin(oyaw)
                 x, y = nx, ny
                 touching = False
             elif not touching:
@@ -199,6 +209,9 @@ def run(world: World, cfg: Config, seconds: float = 300.0, seed: int = 0, drift:
         t += dt
     res.stats = brain.stats
     res.bend_open = brain.bend is not None
+    res.odom_error = math.hypot(ox - x, oy - y)
+    (cx, cy), _ = brain.localizer.correct((ox, oy), oyaw)
+    res.corrected_error = math.hypot(cx - x, cy - y)
     return res
 
 

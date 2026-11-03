@@ -34,6 +34,7 @@ from .depth import DepthFrame, Pose, View, analyse, column_azimuth, geometry, he
 from .explore import Explorer
 from .hazards import LOW, SIDE, HazardMap
 from .home import Homing
+from .localize import Localizer
 from .recover import FALLEN, LIMP, Recovery
 
 
@@ -490,6 +491,7 @@ class Brain:
         self.hazards = HazardMap(cfg, self.stats)
         self.recovery = Recovery(cfg)
         self.homing = Homing(cfg)
+        self.localizer = Localizer(cfg)
         self.face_target: float | None = None
         self.stuck_turn: float | None = None   # after getting stuck: turn this way (+1 left), all the way
         self.explorer = Explorer(cfg)
@@ -544,6 +546,24 @@ class Brain:
             if lat is not None:
                 return -1.0 if lat >= 0 else 1.0
         return None
+
+    def _localized(self, inputs: Inputs) -> Inputs:
+        """Odometry corrected against the walls seen before (localize.py); a fall resets it, like
+        the map, since the odometry's position can't be trusted after one."""
+        from dataclasses import replace
+
+        lz = self.localizer
+        if not inputs.safe and inputs.safe_reason in (FALLEN, LIMP):
+            lz.reset()
+        elif inputs.safe and inputs.yaw is not None:
+            sx = inputs.pose.sensor_pos[0] if inputs.pose else self.cfg.low.nominal_sensor_forward
+            raw = inputs.yaw * self.cfg.heading.yaw_sign
+            lz.update(inputs.frame, inputs.pos, raw, sx, inputs.now, head_yaw(inputs.pose) if self.cfg.head.scan else 0.0)
+        pos, yaw = lz.correct(inputs.pos, None if inputs.yaw is None else inputs.yaw * self.cfg.heading.yaw_sign)
+        if yaw is not None:
+            yaw = (yaw + math.pi) % (2 * math.pi) - math.pi
+            yaw *= self.cfg.heading.yaw_sign
+        return replace(inputs, pos=pos, yaw=yaw)
 
     def mark_busy_sides(self, now: float) -> None:
         """Exploration: a side with something near the body (side memory) gets no bends for a while."""
@@ -679,6 +699,8 @@ class Brain:
                 self.stats.forward_seconds += dt
         tick_dt = 0.0 if self._last_now is None else max(0.0, min(0.2, inputs.now - self._last_now))
         self._last_now = inputs.now
+        if self.cfg.localize.enabled:
+            inputs = self._localized(inputs)
         self._track_yaw(inputs.yaw)
         self.head_now = head_yaw(inputs.pose) if self.cfg.head.scan else 0.0
         self.hazards.update(inputs.frame, inputs.pose, inputs.pos, self.yaw, inputs.safe, inputs.now)

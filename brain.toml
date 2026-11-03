@@ -119,6 +119,18 @@ face_threshold_deg = 60.0 # the way home this far off the heading: stop and turn
 replan_every = 1.0        # re-plan the path this often (s)
 yield_seconds = 4.0       # after any avoidance, stop steering for home this long: the avoidance first
 
+[localize]
+# Correct odometry drift by matching the wall rows' returns against walls seen at least min_age s
+# earlier, on a 5 cm grid (localize.py). Everything the brain remembers then uses the corrected pose.
+enabled = false
+every = 3                 # match every this many new frames
+min_points = 12           # a frame is matched only if this many of its wall returns land near walls seen before
+min_gain_m = 0.006        # apply a shift only if it brings the returns this much closer to old walls, on average (m)
+min_gain_rel = 0.2        # ... and by at least this fraction
+min_age = 20.0            # walls seen less than this long ago don't count (a frame would match itself)
+search_step = 0.04        # shifts tried: 0 and +-this (m), in x and y
+search_turn_deg = 1.5     # turns tried: 0 and +-this (degrees)
+
 [recover]
 # A robot that stays down (robotd gets it up after most falls, but not from lying on its side, and
 # never tries twice): after after_seconds down, stop the policy, robot.init (joints to the home pose,
