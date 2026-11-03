@@ -96,6 +96,8 @@ side_choices                     0.00 ± 0.00 [0–0]            3.00 ± 2.55 [0
 real-time checks at >= 1.00x: 10
 ```
 
+Repeated at the same commit, with the run folders kept this time ([`docs/ab/explore-0f9f816-rerun.txt`](docs/ab/explore-0f9f816-rerun.txt)): area 6.30 ± 1.41 vs 6.90 ± 2.98 m², avoidances 391 vs 379 — noise again, the same conclusion with different numbers, which is what noise looks like.
+
 **Head scan off vs. on, 5 + 5 runs** ([`docs/ab/head-scan-3b323ee.txt`](docs/ab/head-scan-3b323ee.txt))
 
 ```text
