@@ -24,11 +24,18 @@ def test_plan_goes_only_through_walked_cells_and_never_cuts_a_corner():
 
 
 def test_plan_avoids_walls_and_says_when_there_is_no_way():
-    visited = {(x, y) for x in range(5) for y in range(3)}
-    blocked = {(2, 0), (2, 1)}
+    blocked = {(2, 0), (2, 1)}                                  # a wall the robot walked round
+    visited = {(x, y) for x in range(5) for y in range(3)} - blocked
     path = plan(visited, blocked, (0, 0), (4, 0))
     assert path and not set(path) & blocked and (2, 2) in path
-    assert plan(visited, blocked | {(2, 2)}, (0, 0), (4, 0)) is None
+    assert plan(visited - {(2, 2)}, blocked | {(2, 2)}, (0, 0), (4, 0)) is None
+
+
+def test_a_walked_cell_is_never_a_wall():
+    """Full simulator: 86 of 92 walked cells were also mapped as walls (the walls beside the path
+    land in its 25 cm cells), and no way home was found at all."""
+    visited = {(x, 0) for x in range(6)}
+    assert plan(visited, set(visited), (0, 0), (5, 0)) == [(x, 0) for x in range(6)]
 
 
 def test_homing_starts_after_after_seconds_of_walking_and_arrives():
@@ -68,8 +75,8 @@ def test_goes_home_in_the_living_room_without_touching_anything():
 
 
 def test_plan_keeps_clear_of_walls_when_it_can():
-    visited = {(x, y) for x in range(6) for y in range(3)}
     blocked = {(3, 0)}                                          # a chair leg in the bottom row
+    visited = {(x, y) for x in range(6) for y in range(3)} - blocked
     path = plan(visited, blocked, (0, 0), (5, 0))
     near = {(3 + dx, 0 + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
     assert not set(path[1:-1]) & near                           # goes round, one cell clear

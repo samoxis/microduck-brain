@@ -21,17 +21,23 @@ STEPS = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]
 
 
 def plan(visited, blocked, start: tuple[int, int], goal: tuple[int, int], max_cells: int = 20000,
-         clearance: bool = True):
+         clearance: bool = True, _avoid=None):
     """Shortest 8-connected path of cells from ``start`` to ``goal`` through ``visited`` cells,
     avoiding ``blocked`` ones; None if there is none. Breadth-first, with diagonal steps costing the
     same as straight ones (good enough at this scale). With ``clearance``, cells next to a blocked one
     are avoided too, unless that leaves no way at all: a path along the centres of 25 cm cells next
     to a chair leg passes within a body's width of it."""
+    # A cell the trunk walked through is free, whatever was mapped in it: with 25 cm cells, the walls
+    # beside a path land in the very cells it went through (in the full simulator, 86 of 92 walked
+    # cells were also "walls", and there was no way home at all).
+    blocked = set(blocked) - set(visited)
     if clearance:
         near = {(c[0] + dx, c[1] + dy) for c in blocked for dx, dy in STEPS}
-        path = plan(visited, set(blocked) | (near - {start, goal}), start, goal, max_cells, clearance=False)
+        path = plan(visited, blocked, start, goal, max_cells, clearance=False, _avoid=near - {start, goal})
         if path is not None:
             return path
+    if _avoid:
+        blocked = blocked | _avoid             # the clearance pass: walked or not, keep clear of walls
     if start == goal:
         return [start]
 
