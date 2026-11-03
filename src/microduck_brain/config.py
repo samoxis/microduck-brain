@@ -117,6 +117,32 @@ class Head:
     amplitude_deg: float = 25.0
     period: float = 2.5
     side_free_seconds: float = 3.0
+    pitch: bool = False
+    pitch_down_deg: float = 20.0
+    pitch_after_turn: float = 1.5
+
+
+@dataclass
+class Home:
+    """Go back to where it started (see home.py). Off by default."""
+
+    enabled: bool = False
+    after_seconds: float = 240.0
+    arrive_radius: float = 0.35
+    lookahead_cells: int = 3
+    face_threshold_deg: float = 60.0
+    replan_every: float = 1.0
+
+
+@dataclass
+class Recover:
+    """Help a robot that stays down (see recover.py). Off by default."""
+
+    enabled: bool = False
+    after_seconds: float = 6.0
+    init_seconds: float = 2.5
+    verify_seconds: float = 8.0
+    max_attempts: int = 3
 
 
 @dataclass
@@ -144,6 +170,8 @@ class Config:
     heading: Heading = field(default_factory=Heading)
     explore: Explore = field(default_factory=Explore)
     head: Head = field(default_factory=Head)
+    recover: Recover = field(default_factory=Recover)
+    home: Home = field(default_factory=Home)
     safety: Safety = field(default_factory=Safety)
     loop: Loop = field(default_factory=Loop)
 
@@ -191,8 +219,18 @@ class Config:
         if not 0 <= e.max_bend_deg <= 90 or not 0 <= e.novelty_margin <= 1:
             raise ValueError("explore: max_bend_deg in [0, 90], novelty_margin in [0, 1]")
         hd = self.head
+        if not 0 <= hd.pitch_down_deg <= 40 or hd.pitch_after_turn < 0:
+            raise ValueError("head: pitch_down_deg in [0, 40], pitch_after_turn >= 0")
         if not 0 <= hd.amplitude_deg <= 60 or hd.period <= 0 or hd.side_free_seconds < 0:
             raise ValueError("head: amplitude_deg in [0, 60], period > 0, side_free_seconds >= 0")
+        hm = self.home
+        if hm.after_seconds < 0 or hm.arrive_radius <= 0 or hm.lookahead_cells < 1 or hm.replan_every <= 0:
+            raise ValueError("home: after_seconds >= 0, arrive_radius > 0, lookahead_cells >= 1, replan_every > 0")
+        if not 10 <= hm.face_threshold_deg <= 180:
+            raise ValueError("home: face_threshold_deg in [10, 180]")
+        rc = self.recover
+        if rc.after_seconds < 0 or rc.init_seconds <= 0 or rc.verify_seconds <= 0 or rc.max_attempts < 1:
+            raise ValueError("recover: after_seconds >= 0, init_seconds > 0, verify_seconds > 0, max_attempts >= 1")
         if self.loop.rate_hz <= 0:
             raise ValueError("loop: rate_hz must be > 0")
         if self.corner.turns_before_big_turn < 1:

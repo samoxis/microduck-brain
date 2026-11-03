@@ -130,3 +130,92 @@ def test_runner_sends_robot_head_while_scanning_and_centres_it_on_exit(robot):  
     finally:
         Runner._notify = orig
     assert robot.moves                                               # it walked
+
+
+# --- head pitch ---------------------------------------------------------------------------
+PITCH = {"head": {"pitch": True}}
+
+
+def _fixture_frames():
+    import json
+    from pathlib import Path
+
+    from microduck_brain.depth import DepthFrame, Pose
+
+    for f in json.loads((Path(__file__).parent / "fixtures" / "mujoco_head_pitch.json").read_text()):
+        p = f["pose"]
+        yield f, DepthFrame(8, 8, tuple(f["distance_mm"]), tuple(f["status"])), \
+            Pose(tuple(p["sensor_pos"]), tuple(p["sensor_quat"]), tuple(p["gravity"]), p["trunk_z"])
+
+
+def test_pitched_head_sees_no_ghosts_on_real_mujoco_floor_frames():
+    from microduck_brain.depth import drop_zones, geometry, low_obstacles
+
+    cfg = from_dict(PITCH)
+    n = 0
+    for f, frame_, pose in _fixture_frames():
+        if f["shape"] != "none":
+            continue
+        g = geometry(pose, cfg)
+        assert not low_obstacles(frame_, pose, cfg, g) and not drop_zones(frame_, pose, cfg, g)
+        assert analyse(frame_, cfg.obstacle, geom=g).front >= 1.0          # the floor is not a wall
+        n += 1
+    assert n == 48
+
+
+def test_without_pitch_awareness_a_pitched_head_reads_the_floor_as_a_wall():
+    """Why the geometry is needed: the same frames through the level-head arithmetic."""
+    cfg = Config()
+    alarms = sum(1 for f, frame_, pose in _fixture_frames()
+                 if f["shape"] == "none" and f["head"].get("head_pitch", 0) >= 0.35
+                 and analyse(frame_, cfg.obstacle).front < 1.0)
+    assert alarms == 24
+
+
+@pytest.mark.parametrize("hp,closest", [(0.0, 0.50), (0.35, 0.20), (0.5, 0.16)])
+def test_looking_down_brings_close_cubes_into_view(hp, closest):
+    """Real MuJoCo frames: a 7 cm cube is invisible under 45 cm with the head level (finding 3);
+    pitched 20 deg down it is seen from 20 cm, with no gap up to 60 cm."""
+    from microduck_brain.depth import geometry, low_obstacles
+
+    cfg = from_dict(PITCH)
+    seen = {}
+    for f, frame_, pose in _fixture_frames():
+        if f["shape"] == "cube" and abs(f["head"].get("head_pitch", 0) - hp) < 1e-9:
+            hit = bool(low_obstacles(frame_, pose, cfg, geometry(pose, cfg)))
+            seen.setdefault(f["x"], []).append(hit)
+    assert all(all(v) for x, v in seen.items() if x >= closest)
+    assert not any(any(v) for x, v in seen.items() if x < closest)
+
+
+def test_pitch_goes_down_while_turning_and_stays_level_walking_clear():
+    from .test_brain import wall_ahead
+
+    cfg = from_dict({**PITCH, "safety": {"resume_delay": 0.2}})
+    b = Brain(cfg)
+    pose = world2d._pose(0.0)
+    t, yaw, log = 0.0, 0.0, []
+    for frame_, secs in ((clear(), 5.0), (wall_ahead(), 2.0), (clear(), 6.0)):
+        end = t + secs
+        while t < end:
+            cmd = b.tick(Inputs(t, frame_, True, "", yaw, pose, (0.0, 0.0)))
+            if cmd.kind == "move":
+                yaw += 0.5 * cmd.vyaw * 0.05                 # turns at half the commanded rate
+            log.append((t, b.state_name, cmd.head_pitch))
+            t += 0.05
+    down = math.radians(cfg.head.pitch_down_deg)
+    assert all(p == 0.0 for tt, s, p in log if s == "forward" and tt < 4.9)          # clear: level
+    assert any(p == down for tt, s, p in log if s in ("brake", "turn"))
+    assert log[-1][2] == 0.0                                                          # level again
+
+
+def test_pitch_replays_exactly_and_old_recordings_still_do(tmp_path):
+    from microduck_brain.record import Recorder, replay
+
+    cfg = from_dict({**PITCH, "head": {"pitch": True, "scan": True}})
+    path = tmp_path / "run.jsonl.gz"
+    rec = Recorder(path)
+    r = world2d.run(world2d.worlds()[3], cfg, 120, 1, recorder=rec, with_pose=True)
+    rec.close()
+    assert r.contacts == 0
+    assert replay(path, cfg).differing == 0

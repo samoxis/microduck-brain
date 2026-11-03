@@ -55,11 +55,14 @@ class Recorder:
             "yaw": inp.yaw,
             "pos": list(inp.pos) if inp.pos is not None else None,
             "cmd": [cmd.kind, round(cmd.vx, 5), round(cmd.vyaw, 5)]
-                   + ([round(cmd.head_yaw, 5)] if cmd.head_yaw is not None else []),
+                   + ([round(cmd.head_yaw, 5)] if cmd.head_yaw is not None else [])
+                   + ([round(cmd.head_pitch, 5)] if cmd.head_pitch is not None else []),
             "state": state,
         }
         if inp.safe_reason:
             rec["why"] = inp.safe_reason
+        if cmd.kind == "call":
+            rec["call"] = [cmd.method, cmd.params or {}]
         if self._first or inp.frame is not self._last_frame:
             rec["f"] = None if inp.frame is None else {"d": list(inp.frame.distance_mm), "s": list(inp.frame.status)}
             self._last_frame = inp.frame
@@ -104,7 +107,9 @@ def read(path: str | Path) -> Iterator[Tick]:
                 yaw=r["yaw"], pose=pose, pos=tuple(r["pos"]) if r["pos"] is not None else None,
             )
             kind, vx, vyaw, *head = r["cmd"]
-            yield Tick(inp, Command(kind, vx, vyaw, head[0] if head else None), r["state"])
+            method, params = r.get("call", ["", None])
+            yield Tick(inp, Command(kind, vx, vyaw, head[0] if head else None,
+                                    head[1] if len(head) > 1 else None, method, params), r["state"])
 
 
 @dataclass
@@ -123,6 +128,11 @@ def replay(path: str | Path, cfg: Config) -> Replay:
         cmd = out.brain.tick(tick.inputs)
         out.ticks += 1
         same = cmd.kind == tick.cmd.kind and abs(cmd.vx - tick.cmd.vx) < 1e-4 and abs(cmd.vyaw - tick.cmd.vyaw) < 1e-4
+        if (cmd.head_pitch is None) != (tick.cmd.head_pitch is None) or (
+                cmd.head_pitch is not None and abs(cmd.head_pitch - tick.cmd.head_pitch) > 1e-4):
+            same = False
+        if cmd.kind == "call" and (cmd.method, cmd.params or {}) != (tick.cmd.method, tick.cmd.params or {}):
+            same = False
         if (cmd.head_yaw is None) != (tick.cmd.head_yaw is None) or (
                 cmd.head_yaw is not None and abs(cmd.head_yaw - tick.cmd.head_yaw) > 1e-4):
             same = False

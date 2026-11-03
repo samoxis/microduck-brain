@@ -143,8 +143,18 @@ class Runner:
             return
         if cmd.head_yaw is not None:
             # Deltas from the home pose (radians, trunk frame); the walking policy is trained with them.
-            self._notify("robot.head", {"neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": cmd.head_yaw, "head_roll": 0.0})
+            self._notify("robot.head", {"neck_pitch": 0.0, "head_pitch": cmd.head_pitch or 0.0,
+                                        "head_yaw": cmd.head_yaw, "head_roll": 0.0})
         if cmd.kind == "none":
+            return
+        if cmd.kind == "call":
+            try:
+                if not self.link.connected:
+                    self.link.connect()
+                log.warning("recover: %s %s", cmd.method, cmd.params or {})
+                self.link.call(cmd.method, cmd.params or None)
+            except (OSError, RpcError) as e:
+                log.warning("recover: %s failed: %s", cmd.method, e)
             return
         try:
             if not self.link.connected:
@@ -173,7 +183,7 @@ class Runner:
                 if not self.link.connected:
                     self.link.connect()
                 self.link.notify("robot.move", {"vx": 0.0, "vy": 0.0, "vyaw": 0.0})
-                if self.cfg.head.scan:
+                if self.cfg.head.scan or self.cfg.head.pitch:
                     self.link.notify("robot.head", {"neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "head_roll": 0.0})
                 self.link.call("robot.stop")
                 return

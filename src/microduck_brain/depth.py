@@ -108,13 +108,19 @@ def _column_minima(frame: DepthFrame, cfg: Obstacle, cols: range) -> list[float]
     return out
 
 
-def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None, yaw: float = 0.0) -> View:
+def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None, yaw: float = 0.0,
+            geom: "Geometry | None" = None) -> View:
     """Analyse the wall rows of a frame. ``threshold`` = distance below which a zone is "near"
     (``stop_distance`` by default; ``clear_distance`` when deciding a turn is finished). ``yaw`` =
     where the head looks (rad, + = left, see ``head_yaw``): the returns are rotated into the trunk's
-    frame before deciding what is "ahead" and which side a column is on."""
+    frame before deciding what is "ahead" and which side a column is on.
+
+    With ``geom`` (the head pitched, see ``Geometry``), every return is placed with the sensor's full
+    pose instead, and a wall-row return that lands on the floor is the floor, not a wall."""
     if frame.rows != 8 or frame.cols != 8:
         raise ValueError(f"expected an 8x8 frame, got {frame.rows}x{frame.cols}")
+    if geom is not None:
+        return _analyse_tilted(frame, cfg, cfg.stop_distance if threshold is None else threshold, geom)
     threshold = cfg.stop_distance if threshold is None else threshold
 
     rows = range(cfg.first_row, cfg.last_row + 1)
@@ -157,6 +163,38 @@ def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None, ya
     left_free = sum(left) / len(left) if left else 0.0
     right_free = sum(right) / len(right) if right else 0.0
     return View(blocked, blind, nearest, front, left_free, right_free)
+
+
+def _analyse_tilted(frame: DepthFrame, cfg: Obstacle, threshold: float, geom: "Geometry") -> View:
+    rows = range(cfg.first_row, cfg.last_row + 1)
+    front_cols = range(cfg.front_first_col, cfg.front_last_col + 1)
+    measured = sum(1 for r in rows for c in front_cols if frame.zone(r, c, cfg.max_range) is not None)
+    blind = measured < cfg.blind_fraction * len(rows) * len(front_cols)
+    ranges: list[float] = []
+    col_min: dict[int, float] = {}
+    for r in rows:
+        for c in range(frame.cols):
+            d = frame.zone(r, c, cfg.max_range)
+            if d is None:
+                continue
+            i = r * frame.cols + c
+            if geom.not_an_obstacle(i, d):
+                d = cfg.max_range                  # the floor (or a drop): free as far as walls go
+            col_min[c] = min(col_min.get(c, math.inf), d)
+            if d >= cfg.max_range:
+                continue
+            vx, vy, _ = geom.beams[i]
+            if abs(d * vy + cfg.sensor_lateral) <= cfg.corridor_half_width:
+                ranges.append(d * vx)
+    ranges.sort()
+    nearest = ranges[0] if ranges else None
+    k = max(1, cfg.min_zones)
+    front = ranges[k - 1] if len(ranges) >= k else (cfg.max_range if col_min else None)
+    blocked = blind or (front is not None and front < threshold)
+    left = [v for c, v in col_min.items() if geom.column_side(c) > 0]
+    right = [v for c, v in col_min.items() if geom.column_side(c) <= 0]
+    return View(blocked, blind, nearest, front,
+                sum(left) / len(left) if left else 0.0, sum(right) / len(right) if right else 0.0)
 
 
 # ── Floor geometry ──────────────────────────────────────────────────────────────────
@@ -264,6 +302,42 @@ def floor_model(pose: Pose | None, low) -> FloorModel:
     return FloorModel(h, down_sin, horiz)
 
 
+def _rotate(q: tuple[float, float, float, float], v: tuple[float, float, float]) -> tuple[float, float, float]:
+    """Rotate v by quaternion q = [w,x,y,z] (sensor -> trunk)."""
+    w, x, y, z = q
+    n = math.sqrt(w * w + x * x + y * y + z * z)
+    return _rotate_inv((w / n, -x / n, -y / n, -z / n), v)
+
+
+class Geometry:
+    """The sensor's full pose, for a head that is not level (``[head] pitch``): every beam in the
+    trunk's frame, and the floor each zone would see. A return within the floor tolerance of the
+    floor is the floor; one beyond it is a drop; neither is an obstacle, whichever row it is in."""
+
+    def __init__(self, pose: Pose, cfg) -> None:
+        self.beams = [_rotate(pose.sensor_quat, b) for b in BEAMS]
+        self.floor = floor_model(pose, cfg.low)
+        self.tilt = cfg.low.tilt_tolerance_deg
+        self.margin = cfg.low.range_margin
+        mid = 3 * 8                      # a column's side: where its middle row points, in the trunk
+        self._side = [self.beams[mid + c][1] for c in range(8)]
+
+    def not_an_obstacle(self, i: int, d: float) -> bool:
+        exp = self.floor.expected(i, self.tilt)
+        return math.isfinite(exp) and d >= exp * (1.0 - self.margin)
+
+    def column_side(self, c: int) -> float:
+        return self._side[c]
+
+
+def geometry(pose: Pose | None, cfg) -> Geometry | None:
+    """A ``Geometry`` when the head may pitch (``[head] pitch``) and there is a pose; else None, and
+    every caller keeps its level-head arithmetic, bit for bit."""
+    if pose is None or not cfg.head.pitch:
+        return None
+    return Geometry(pose, cfg)
+
+
 @dataclass(frozen=True)
 class LowObstacle:
     row: int
@@ -274,14 +348,19 @@ class LowObstacle:
     ratio: float        # measured / expected floor range (< 1 = closer than the floor)
 
 
-def low_obstacles(frame: DepthFrame, pose: Pose | None, cfg) -> list[LowObstacle]:
+def low_obstacles(frame: DepthFrame, pose: Pose | None, cfg, geom: Geometry | None = None) -> list[LowObstacle]:
     """Bottom-row zones that read clearly shorter than an empty floor, under a clear wall row
     (otherwise it is the foot of a wall, not a low object).
 
     ``cfg`` is the whole Config. The tilt tolerance and range margin absorb pose error (timing,
-    gait sway) and sensor noise; without a pose the tolerance is wider."""
+    gait sway) and sensor noise; without a pose the tolerance is wider.
+
+    With ``geom`` (the head pitched) every row that sees the floor is used, "the foot of a wall" is
+    judged on the real obstacles above the zone in its column, and positions use the full pose."""
     if frame.rows != 8 or frame.cols != 8:
         return []
+    if geom is not None:
+        return _low_tilted(frame, cfg, geom)
     lo = cfg.low
     o = cfg.obstacle
     model = floor_model(pose, lo)
@@ -321,6 +400,32 @@ def low_obstacles(frame: DepthFrame, pose: Pose | None, cfg) -> list[LowObstacle
 # a real sensor would see the step, i.e. a longer range. Both count.
 
 
+def _low_tilted(frame: DepthFrame, cfg, geom: Geometry) -> list[LowObstacle]:
+    lo, o = cfg.low, cfg.obstacle
+    out = []
+    for c in range(8):
+        above = math.inf                     # nearest real obstacle in the rows above, this column
+        for r in range(8):
+            i = r * 8 + c
+            d = frame.zone(r, c, o.max_range)
+            if d is None or d >= o.max_range:
+                continue
+            exp_near = geom.floor.expected(i, geom.tilt)
+            if geom.not_an_obstacle(i, d):
+                continue                     # floor (or further)
+            if not math.isfinite(exp_near):
+                above = min(above, d)        # a beam that never meets the floor: a wall return
+                continue
+            vx, vy, _ = geom.beams[i]
+            if above < d + lo.wall_margin or d * vx < lo.min_range:
+                above = min(above, d)
+                continue                     # the foot of a wall / phantom returns close in
+            exp_nom = geom.floor.expected(i, 0.0)
+            out.append(LowObstacle(r, c, d, d * vx, d * vy, d / exp_nom if math.isfinite(exp_nom) else 0.0))
+            above = min(above, d)
+    return out
+
+
 @dataclass(frozen=True)
 class DropZone:
     row: int
@@ -330,16 +435,17 @@ class DropZone:
     no_target: bool     # True = 255 (nothing), False = a range longer than the floor
 
 
-def drop_zones(frame: DepthFrame, pose: Pose | None, cfg) -> list[DropZone]:
+def drop_zones(frame: DepthFrame, pose: Pose | None, cfg, geom: Geometry | None = None) -> list[DropZone]:
     """Bottom-row zones where the floor is missing. Reported only if at least ``drop.min_zones``
-    such zones are in the frame (a single missed zone is noise)."""
+    such zones are in the frame (a single missed zone is noise). With ``geom`` every row that sees
+    the floor close enough is used, with positions from the full pose."""
     if frame.rows != 8 or frame.cols != 8:
         return []
     dr = cfg.drop
-    model = floor_model(pose, cfg.low)
+    model = geom.floor if geom is not None else floor_model(pose, cfg.low)
     tilt = cfg.low.tilt_tolerance_deg if pose is not None else cfg.low.tilt_tolerance_nopose_deg
     out = []
-    for r in range(cfg.obstacle.last_row + 1, 8):
+    for r in (range(8) if geom is not None else range(cfg.obstacle.last_row + 1, 8)):
         for c in range(8):
             i = r * 8 + c
             nominal = model.expected(i, 0.0)
@@ -355,6 +461,6 @@ def drop_zones(frame: DepthFrame, pose: Pose | None, cfg) -> list[DropZone]:
                 no_target = False
             else:
                 continue                     # floor (or closer: an object), or a failed measurement
-            bx, by, _ = BEAMS[i]
+            bx, by, _ = geom.beams[i] if geom is not None else BEAMS[i]
             out.append(DropZone(r, c, nominal * bx, nominal * by, no_target))
     return out if len(out) >= dr.min_zones else []

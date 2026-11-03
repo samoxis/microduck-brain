@@ -63,17 +63,20 @@ class World:
     walls: list[Seg]
     start: tuple[float, float, float]           # x, y, yaw
 
-    def render(self, x: float, y: float, yaw: float, head: float = 0.0) -> DepthFrame:
-        """``head`` = head yaw relative to the trunk (rad, + = left); the sensor turns about its own
-        position (the neck offset is ignored)."""
+    def render(self, x: float, y: float, yaw: float, head: float = 0.0, pitch: float = 0.0) -> DepthFrame:
+        """``head`` = head yaw relative to the trunk (rad, + = left), ``pitch`` = head pitch (rad, + =
+        down; the sensor drops 6.3 cm per rad, as measured in MuJoCo). The neck offset is ignored."""
         c, s = math.cos(yaw), math.sin(yaw)
         sx = x + c * SENSOR_FORWARD - s * SENSOR_LEFT
         sy = y + s * SENSOR_FORWARD + c * SENSOR_LEFT
         ch, sh = math.cos(yaw + head), math.sin(yaw + head)
         dist, status = [], []
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        height = SENSOR_HEIGHT - 0.063 * pitch
         for bx, by, bz in BEAMS:
+            bx, bz = bx * cp + bz * sp, bz * cp - bx * sp
             dx, dy = ch * bx - sh * by, sh * bx + ch * by
-            t = SENSOR_HEIGHT / -bz if bz < -1e-9 else math.inf
+            t = height / -bz if bz < -1e-9 else math.inf
             for w in self.walls:
                 t = min(t, _ray_seg(sx, sy, dx, dy, w))
             mm = int(round(t * 1000)) if math.isfinite(t) else MAX_RANGE_MM + 1
@@ -137,11 +140,12 @@ HEAD_TAU = 0.12          # the head follows its command with this time constant 
 HEAD_RATE = 4.0          # ... and at most this fast (rad/s)
 
 
-def _pose(head: float):
+def _pose(head: float, pitch: float = 0.0):
     from microduck_brain.depth import Pose
 
-    return Pose((SENSOR_FORWARD, SENSOR_LEFT, SENSOR_HEIGHT - 0.12),
-                (math.cos(head / 2), 0.0, 0.0, math.sin(head / 2)), (0.0, 0.0, -1.0), 0.12)
+    cy, sy, cp, sp = math.cos(head / 2), math.sin(head / 2), math.cos(pitch / 2), math.sin(pitch / 2)
+    quat = (cy * cp, -sy * sp, cy * sp, sy * cp)           # yaw about z, then pitch about y
+    return Pose((SENSOR_FORWARD, SENSOR_LEFT, SENSOR_HEIGHT - 0.12 - 0.063 * pitch), quat, (0.0, 0.0, -1.0), 0.12)
 
 
 def run(world: World, cfg: Config, seconds: float = 300.0, seed: int = 0, drift: float = 0.04,
@@ -158,20 +162,24 @@ def run(world: World, cfg: Config, seconds: float = 300.0, seed: int = 0, drift:
     res = Result(world.name)
     t, n, frame = 0.0, 0, None
     touching = False
-    head, head_cmd = 0.0, 0.0
+    head, head_cmd, pitch, pitch_cmd = 0.0, 0.0, 0.0, 0.0
     pose = _pose(0.0) if with_pose else None
     while t < seconds:
         if n % frame_every == 0:
-            frame = world.render(x, y, yaw, head)
-            pose = _pose(head) if with_pose else None
+            frame = world.render(x, y, yaw, head, pitch)
+            pose = _pose(head, pitch) if with_pose else None
         n += 1
         wyaw = (yaw + math.pi) % (2 * math.pi) - math.pi
         inp = Inputs(t, frame, True, "", wyaw, pose, (x, y))
         cmd = brain.tick(inp)
         if cmd.head_yaw is not None:
             head_cmd = cmd.head_yaw
+        if cmd.head_pitch is not None:
+            pitch_cmd = cmd.head_pitch
         step = (head_cmd - head) * min(1.0, dt / HEAD_TAU)
         head += max(-HEAD_RATE * dt, min(HEAD_RATE * dt, step))
+        step = (pitch_cmd - pitch) * min(1.0, dt / HEAD_TAU)
+        pitch += max(-HEAD_RATE * dt, min(HEAD_RATE * dt, step))
         if recorder is not None:
             recorder.write(inp, cmd, brain.state_name)
         if cmd.kind == "move":

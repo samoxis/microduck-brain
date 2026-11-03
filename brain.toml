@@ -102,6 +102,30 @@ scan = false
 amplitude_deg = 25.0      # how far left and right the head turns (degrees)
 period = 2.5              # one full left-right-left sweep (s)
 side_free_seconds = 3.0   # while the head looks to one side, remember how free the other side was this long
+pitch = false             # look down (head_pitch) while stopping, turning and approaching something: the
+                          # 7 cm objects under the level beams within ~45 cm come into view (finding 3)
+pitch_down_deg = 20.0     # how far down (degrees; robot.head head_pitch delta, + = down)
+pitch_after_turn = 1.5    # keep looking down this long after a stop or a turn in place (s)
+
+[home]
+# Go back to where it started, through cells it has already walked (home.py). Uses the same map as
+# [explore] (it is kept even when exploration is off). Positions are odometry: they drift.
+enabled = false
+after_seconds = 240.0     # walking time before heading home
+arrive_radius = 0.35      # home is reached within this (m)
+lookahead_cells = 3       # steer towards the path cell this many cells ahead
+face_threshold_deg = 60.0 # the way home this far off the heading: stop and turn to face it first
+replan_every = 1.0        # re-plan the path this often (s)
+
+[recover]
+# A robot that stays down (robotd gets it up after most falls, but not from lying on its side, and
+# never tries twice): after after_seconds down, stop the policy, robot.init (joints to the home pose,
+# works lying down), start the policy again, which hands it to the standing policy. See recover.py.
+enabled = false
+after_seconds = 6.0       # down (fallen or limp) this long before trying
+init_seconds = 2.5        # robot.init ramps over ~2 s: wait this long before starting the policy
+verify_seconds = 8.0      # then give the standing policy this long before trying again
+max_attempts = 3          # per fall
 
 [safety]
 tof_timeout = 0.5         # a depth frame older than this => stop (never walk blind)

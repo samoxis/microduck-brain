@@ -44,7 +44,7 @@ class Explorer:
         return len(self._blocked)
 
     def update_walls(self, frame, pos, yaw: float | None, sensor_forward: float, obstacle_cfg,
-                     head: float = 0.0) -> None:
+                     head: float = 0.0, geom=None) -> None:
         """Remember the cells where the wall rows of a new frame hit something. ``head`` = where the
         head looks, relative to the trunk (rad, + = left)."""
         if frame is None or frame is self._last_frame or pos is None or yaw is None:
@@ -59,8 +59,15 @@ class Explorer:
                 d = frame.zone(r, col, math.inf)
                 if d is None or not math.isfinite(d) or d > WALL_RANGE:
                     continue
-                bx, by, _ = BEAMS[r * frame.cols + col]
-                fx, fy = rotate(d * bx, d * by, head)
+                i = r * frame.cols + col
+                if geom is not None:
+                    if geom.not_an_obstacle(i, d):
+                        continue                  # the floor, seen by a pitched head
+                    bx, by, _ = geom.beams[i]
+                    fx, fy = d * bx, d * by
+                else:
+                    bx, by, _ = BEAMS[i]
+                    fx, fy = rotate(d * bx, d * by, head)
                 fx, fy = sensor_forward + fx, fy + o.sensor_lateral
                 key = self._cell(pos[0] + c * fx - s * fy, pos[1] + s * fx + c * fy)
                 self._blocked.pop(key, None)

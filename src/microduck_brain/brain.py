@@ -30,9 +30,11 @@ import math
 from dataclasses import dataclass, field
 
 from .config import Config
-from .depth import DepthFrame, Pose, View, analyse, column_azimuth, head_yaw
+from .depth import DepthFrame, Pose, View, analyse, column_azimuth, geometry, head_yaw
 from .explore import Explorer
 from .hazards import LOW, SIDE, HazardMap
+from .home import Homing
+from .recover import FALLEN, LIMP, Recovery
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,9 @@ class Command:
     vx: float = 0.0
     vyaw: float = 0.0
     head_yaw: float | None = None  # robot.head yaw target (rad, + = left), None = send no head command
+    head_pitch: float | None = None  # robot.head head_pitch delta (rad, + = down), with head_yaw
+    method: str = ""               # kind "call": a discrete request to robotd (see recover.py)
+    params: dict | None = None
 
 
 NONE = Command("none")
@@ -77,6 +82,12 @@ class Stats:
     bends_interrupted: int = 0    # ... ended by an obstacle ahead (the avoidance takes over)
     bends_aborted: int = 0        # ... cancelled: something came beside the body on that side
     bends_refused: int = 0        # a more novel direction existed, but the bend was not started (see the log)
+    home_started: int = 0         # home.py: homing started (after home.after_seconds of walking)
+    home_arrived: int = 0         # ... and reached home
+    home_aborted: int = 0         # ... and given up (a fall: the odometry can't be trusted)
+    home_seconds: float = 0.0     # how long the way home took
+    recovery_attempts: int = 0    # recover.py: sequences started (stop policy, init, start policy)
+    recoveries_ok: int = 0        # ... after which the robot was safe again
     novel_turns: int = 0          # exploration: turned towards the less visited side (both about equally free)
     forward_seconds: float = 0.0
     state_seconds: dict[str, float] = field(default_factory=dict)
@@ -108,13 +119,24 @@ class Hold(State):
         self._stop_sent = False
         brain.heading_integral = 0.0
         brain.hazards.forget()   # after a fall the odometry's position can no longer be trusted
-        brain.explorer.forget()
+        if inputs.safe_reason in (FALLEN, LIMP) or not (brain.cfg.home.enabled or brain.cfg.explore.enabled):
+            # The map and the way home go only after a fall; a hold for a slow control loop or a
+            # missing frame doesn't move the robot.
+            brain.explorer.forget()
+            if brain.homing.active or brain.homing.home is not None:
+                if brain.homing.active:
+                    brain.stats.home_aborted += 1
+                brain.homing.reset()
 
     def step(self, brain, inputs):
         cmd = NONE
         if not self._stop_sent:
             self._stop_sent = True
             cmd = STOP
+        else:
+            call = brain.recovery.tick(inputs.now, inputs.safe, inputs.safe_reason, brain.stats)
+            if call is not None:
+                cmd = Command("call", method=call[0], params=call[1])
         if inputs.safe and inputs.frame is not None:
             if self._ok_since is None:
                 self._ok_since = inputs.now
@@ -172,14 +194,38 @@ class Forward(State):
                 # Clear again: the current direction becomes the heading to hold.
                 self._straight = True
                 brain.heading_target = brain.yaw
-            self._check_bend(brain, inputs.now)
-            self._maybe_bend(brain, inputs, view)
+            if brain.homing.active and inputs.pos is not None and brain.yaw is not None:
+                done = self._home_heading(brain, inputs)
+                if done is not None:
+                    return done
+            else:
+                self._check_bend(brain, inputs.now)
+                self._maybe_bend(brain, inputs, view)
             target = self._heading_correction(brain, dt)
 
         # Slew-limit the turn command: no sudden jerks.
         step = cfg.obstacle.steer_slew * dt
         self._yaw_cmd += max(-step, min(step, target - self._yaw_cmd))
         return move(cfg.motion.forward_speed, self._yaw_cmd), None
+
+    @staticmethod
+    def _home_heading(brain, inputs):
+        """Homing: arrived -> stop; the way home far off the heading -> turn to face it in place;
+        otherwise hold the heading towards the next waypoint."""
+        h = brain.homing
+        if h.distance(inputs.pos) <= brain.cfg.home.arrive_radius:
+            h.active, h.arrived = False, True
+            brain.stats.home_arrived += 1
+            brain.stats.home_seconds = inputs.now - h.since
+            return STOP, "home"
+        b = h.bearing(brain.explorer, inputs.pos, inputs.now)
+        err = (b - brain.yaw + math.pi) % (2 * math.pi) - math.pi
+        if abs(err) > math.radians(brain.cfg.home.face_threshold_deg):
+            brain.face_target = brain.yaw + err
+            return move(0.0, 0.0), "face"
+        if brain.heading_target is None or abs(brain.yaw + err - brain.heading_target) > 0.05:
+            brain.heading_target = brain.yaw + err
+        return None
 
     def _maybe_bend(self, brain, inputs, view) -> None:
         """Exploration: now and then, bend the heading towards a less visited direction."""
@@ -342,6 +388,38 @@ class BigTurn(_Rotation):
         return move(0.0, brain.turn_sign * brain.cfg.motion.big_turn_speed), None
 
 
+class Face(_Rotation):
+    """Homing: turn in place to face the way home (measured with odom.yaw)."""
+
+    name = "face"
+
+    def step(self, brain, inputs):
+        elapsed = inputs.now - self.since
+        if brain.yaw is None or brain.face_target is None or elapsed >= brain.cfg.obstacle.max_turn_time:
+            return move(0.0, 0.0), "forward"
+        err = brain.face_target - brain.yaw
+        if abs(err) < math.radians(15):
+            brain.heading_target = brain.face_target
+            return move(0.0, 0.0), "forward"
+        return move(0.0, (1.0 if err > 0 else -1.0) * brain.cfg.motion.turn_speed), None
+
+
+class AtHome(State):
+    """Homing: arrived. Stand still (one robot.stop), and stay."""
+
+    name = "home"
+    needs_depth = False
+
+    def enter(self, brain, inputs):
+        self._sent = False
+
+    def step(self, brain, inputs):
+        if not self._sent:
+            self._sent = True
+            return STOP, None
+        return NONE, None
+
+
 class Brain:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -356,6 +434,9 @@ class Brain:
         self.heading_target: float | None = None
         self.heading_integral = 0.0
         self.hazards = HazardMap(cfg, self.stats)
+        self.recovery = Recovery(cfg)
+        self.homing = Homing(cfg)
+        self.face_target: float | None = None
         self.explorer = Explorer(cfg)
         self.last_bend_check = -1e9      # exploration: when a bend was last considered (any state)
         self.side_busy_until = {1.0: -1e9, -1.0: -1e9}   # exploration: no bends towards that side until then
@@ -364,9 +445,11 @@ class Brain:
         self.head_now = 0.0             # where the head looks, measured (rad, + = left); 0 unless scanning
         self._scan_t = 0.0              # time spent scanning in the current forward stretch
         self._side_free: dict[str, tuple[float, float]] = {}   # side -> (free, t), while scanning
+        self._last_turn_at = -1e9       # head pitch: when the robot last stopped or turned in place
+        self._close_ahead = False       # head pitch: something within slow_distance ahead, last look
         self._pos: tuple[float, float] | None = None
         self.states: dict[str, State] = {}
-        for s in (Hold(), Forward(), Brake(), Turn(), BigTurn()):
+        for s in (Hold(), Forward(), Brake(), Turn(), BigTurn(), Face(), AtHome()):
             self.register(s)
         self.state: State = self.states["hold"]
         self._last_now: float | None = None
@@ -421,10 +504,14 @@ class Brain:
         """The view ahead: walls from the upper rows plus low objects and drops (seen now or
         remembered), see ``hazards.py``."""
         o = self.cfg.obstacle
-        view = analyse(inputs.frame, o, threshold, self.head_now)
+        geom = geometry(inputs.pose, self.cfg)
+        view = analyse(inputs.frame, o, threshold, self.head_now if geom is None else 0.0, geom)
         if self.cfg.head.scan:
             view = self._remember_sides(view, inputs.now)
-        return self.hazards.merge(view, o.stop_distance if threshold is None else threshold)
+        view = self.hazards.merge(view, o.stop_distance if threshold is None else threshold)
+        if threshold is None:
+            self._close_ahead = view.front is not None and view.front < o.slow_distance
+        return view
 
     def _remember_sides(self, view: View, now: float) -> View:
         """While the head looks to one side, the other half of the view has few or no columns: use
@@ -448,12 +535,29 @@ class Brain:
         the head looks); anywhere else, centre the head."""
         h = self.cfg.head
         if not h.scan:
-            return None
+            return None if not h.pitch else 0.0
         if self.state.name != "forward" or inputs.pose is None:
             self._scan_t = 0.0
             return 0.0
         self._scan_t += dt
         return math.radians(h.amplitude_deg) * math.sin(2 * math.pi * self._scan_t / h.period)
+
+    def _pitch_target(self, inputs: Inputs) -> float | None:
+        """Look down where the 7 cm objects hide under the level beams (finding 3): while stopping or
+        turning in place, for ``pitch_after_turn`` s after, and while something is close ahead.
+        Level while walking with a clear way, to see far. Needs a pose, like the scan."""
+        h = self.cfg.head
+        if not h.pitch:
+            return None
+        if inputs.pose is None or self.state.name in ("hold", "home"):
+            return 0.0
+        down = math.radians(h.pitch_down_deg)
+        if self.state.name in ("brake", "turn", "bigturn", "face"):
+            self._last_turn_at = inputs.now
+            return down
+        if inputs.now - self._last_turn_at < h.pitch_after_turn or self._close_ahead:
+            return down
+        return 0.0
 
     @property
     def low_items(self) -> list[tuple[float, float]]:
@@ -508,10 +612,19 @@ class Brain:
         self.head_now = head_yaw(inputs.pose) if self.cfg.head.scan else 0.0
         self.hazards.update(inputs.frame, inputs.pose, inputs.pos, self.yaw, inputs.safe, inputs.now)
         self._pos = inputs.pos
-        if self.cfg.explore.enabled and inputs.safe:
+        hm = self.cfg.home
+        if hm.enabled and inputs.safe and inputs.pos is not None and not self.homing.arrived:
+            if self.homing.home is None:
+                self.homing.home = inputs.pos
+            if not self.homing.active and self.stats.forward_seconds >= hm.after_seconds:
+                self.homing.active, self.homing.since = True, inputs.now
+                self.stats.home_started += 1
+        if (self.cfg.explore.enabled or hm.enabled) and inputs.safe:
             self.explorer.update(inputs.pos, inputs.now)
             sx = inputs.pose.sensor_pos[0] if inputs.pose else self.cfg.low.nominal_sensor_forward
-            self.explorer.update_walls(inputs.frame, inputs.pos, self.yaw, sx, self.cfg.obstacle, self.head_now)
+            g = geometry(inputs.pose, self.cfg)
+            self.explorer.update_walls(inputs.frame, inputs.pos, self.yaw, sx, self.cfg.obstacle,
+                                       self.head_now if g is None else 0.0, g)
             self.mark_busy_sides(inputs.now)
 
         if not self._started:
@@ -535,7 +648,8 @@ class Brain:
         if nxt is not None:
             self._goto(nxt, inputs)
         head = self._head_target(inputs, tick_dt)
+        pitch = self._pitch_target(inputs)
         if head is not None:
             from dataclasses import replace
-            cmd = replace(cmd, head_yaw=head)
+            cmd = replace(cmd, head_yaw=head, head_pitch=pitch)
         return cmd

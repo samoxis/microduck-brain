@@ -4,6 +4,7 @@ Run it with microduck_rl's venv (it is not part of the regular test suite):
 
     cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py          # cubes, balls, tilt
     cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py --drop   # the staircase
+    cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py --head-pitch   # head tilted down
 
 Every frame comes with the pose the robot would report in robot.state: the sensor's position and
 orientation in the trunk (frames.tof, [w,x,y,z]), gravity projected into the trunk, and the trunk's
@@ -28,6 +29,7 @@ from mjlab_microduck.sim.tof import Tof  # noqa: E402
 D = RL / "src/mjlab_microduck/robot/microduck"
 OUT = Path(__file__).resolve().parent.parent / "tests/fixtures/mujoco_low.json"
 OUT_DROP = Path(__file__).resolve().parent.parent / "tests/fixtures/mujoco_drop.json"
+OUT_HEAD = Path(__file__).resolve().parent.parent / "tests/fixtures/mujoco_head_pitch.json"
 
 
 def quat_mul(a, b):
@@ -37,7 +39,9 @@ def quat_mul(a, b):
             w1*y2 - x1*z2 + y1*w2 + z1*x2, w1*z2 + x1*y2 - y1*x2 + z1*w2]
 
 
-def capture(shape, x, size, pitch_deg=0.0, roll_deg=0.0, lateral=0.0, seed=0):
+def capture(shape, x, size, pitch_deg=0.0, roll_deg=0.0, lateral=0.0, seed=0, head=None):
+    """``head``: {joint name: delta from STAND (rad)}, e.g. {"head_pitch": 0.3}: the same deltas
+    robot.head takes."""
     spec = mujoco.MjSpec.from_file(str(D / "scene_walk.xml"))
     if shape != "none":
         gtype = mujoco.mjtGeom.mjGEOM_BOX if shape == "cube" else mujoco.mjtGeom.mjGEOM_SPHERE
@@ -47,6 +51,8 @@ def capture(shape, x, size, pitch_deg=0.0, roll_deg=0.0, lateral=0.0, seed=0):
     names = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_KEY, i) for i in range(m.nkey)]
     d = mujoco.MjData(m)
     d.qpos[:] = m.key_qpos[names.index("STAND")]
+    for joint, delta in (head or {}).items():
+        d.qpos[m.jnt_qposadr[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, joint)]] += delta
     # trunk tilt: pitch + = nose down (rotation about +y)
     p, r = np.radians(pitch_deg) / 2, np.radians(roll_deg) / 2
     qp, qr = [np.cos(p), 0, np.sin(p), 0], [np.cos(r), np.sin(r), 0, 0]
@@ -65,7 +71,7 @@ def capture(shape, x, size, pitch_deg=0.0, roll_deg=0.0, lateral=0.0, seed=0):
     dist, status = t.frame(d)
     return {
         "shape": shape, "x": x, "size": size, "pitch_deg": pitch_deg, "roll_deg": roll_deg,
-        "lateral": lateral, "seed": seed,
+        "lateral": lateral, "seed": seed, "head": head or {},
         "pose": {"sensor_pos": pos_t.tolist(), "sensor_quat": quat.tolist(),
                  "gravity": gravity.tolist(), "trunk_z": float(d.xpos[trunk][2])},
         "distance_mm": [int(v) for v in dist], "status": [int(v) for v in status],
@@ -142,8 +148,28 @@ def main():
     print(f"{len(out)} frames -> {OUT} ({OUT.stat().st_size // 1024} KiB)")
 
 
+def main_head_pitch():
+    """Head pitched down by robot.head deltas: what the bottom rows see of a 7 cm cube and an 8 cm
+    ball close in (finding 3: under ~45 cm they are invisible with the head level), and empty floor
+    (must stay quiet)."""
+    out = []
+    for hp in (0.0, 0.2, 0.35, 0.5):
+        head = {"head_pitch": hp}
+        for seed in range(4):
+            for pitch in (-3.0, 0.0, 3.0):
+                out.append(capture("none", 0, 0, pitch_deg=pitch, seed=seed, head=head))
+        for shape, size in (("cube", 0.07), ("ball", 0.08)):
+            for x in (0.12, 0.16, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6):
+                for lateral in (-0.04, 0.0, 0.04):
+                    out.append(capture(shape, x, size, lateral=lateral, seed=1, head=head))
+    OUT_HEAD.write_text(json.dumps(out, separators=(",", ":")))
+    print(f"{len(out)} frames -> {OUT_HEAD} ({OUT_HEAD.stat().st_size // 1024} KiB)")
+
+
 if __name__ == "__main__":
-    if "--drop" in sys.argv:
+    if "--head-pitch" in sys.argv:
+        main_head_pitch()
+    elif "--drop" in sys.argv:
         main_drop()
     else:
         main()
