@@ -65,6 +65,10 @@ def test_a_fall_abandons_the_way_home():
     assert b.homing.active
     b.tick(Inputs(3.05, clear(), False, FALLEN, 0.0, None, (1.2, 0.0)))
     assert not b.homing.active and b.stats.home_aborted == 1
+    # Up again: no new "home" where it got up, and no homing for the rest of the run.
+    for i in range(200):
+        b.tick(Inputs(4.0 + i * 0.05, clear(), True, "", 0.0, None, (2.0, 0.0)))
+    assert b.homing.abandoned and b.homing.home is None and b.stats.home_started == 1
 
 
 def test_goes_home_in_the_living_room_without_touching_anything():

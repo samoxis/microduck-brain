@@ -68,6 +68,7 @@ class Homing:
     def __init__(self, cfg) -> None:
         self.cfg = cfg.home
         self.cell = cfg.explore.cell
+        self.abandoned = False          # set after a fall: no way home for the rest of the run
         self.reset()
 
     def reset(self) -> None:

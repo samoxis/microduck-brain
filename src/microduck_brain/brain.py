@@ -130,6 +130,9 @@ class Hold(State):
                 if brain.homing.active:
                     brain.stats.home_aborted += 1
                 brain.homing.reset()
+                # Abandoned for the rest of the run: a new "home" set where it got up would be
+                # reached and reported as home (a full-simulator run did exactly that, 2.1 m off).
+                brain.homing.abandoned = True
 
     def step(self, brain, inputs):
         cmd = NONE
@@ -706,7 +709,8 @@ class Brain:
         self.hazards.update(inputs.frame, inputs.pose, inputs.pos, self.yaw, inputs.safe, inputs.now)
         self._pos = inputs.pos
         hm = self.cfg.home
-        if hm.enabled and inputs.safe and inputs.pos is not None and not self.homing.arrived:
+        if hm.enabled and inputs.safe and inputs.pos is not None and not self.homing.arrived \
+                and not self.homing.abandoned:
             if self.homing.home is None:
                 self.homing.home = inputs.pos
             if not self.homing.active and self.stats.forward_seconds >= hm.after_seconds:
