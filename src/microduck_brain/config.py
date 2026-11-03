@@ -110,6 +110,16 @@ class Explore:
 
 
 @dataclass
+class Head:
+    """Scan with the head (the ToF sensor is on it) while walking: see head.py. Off by default."""
+
+    scan: bool = False
+    amplitude_deg: float = 25.0
+    period: float = 2.5
+    side_free_seconds: float = 3.0
+
+
+@dataclass
 class Safety:
     tof_timeout: float = 0.5
     state_timeout: float = 1.0
@@ -133,6 +143,7 @@ class Config:
     corner: Corner = field(default_factory=Corner)
     heading: Heading = field(default_factory=Heading)
     explore: Explore = field(default_factory=Explore)
+    head: Head = field(default_factory=Head)
     safety: Safety = field(default_factory=Safety)
     loop: Loop = field(default_factory=Loop)
 
@@ -179,6 +190,9 @@ class Config:
             raise ValueError("explore: cell > 0, turn_margin, steer_margin >= 0, bend_every > 0, bend_min_clear >= 0")
         if not 0 <= e.max_bend_deg <= 90 or not 0 <= e.novelty_margin <= 1:
             raise ValueError("explore: max_bend_deg in [0, 90], novelty_margin in [0, 1]")
+        hd = self.head
+        if not 0 <= hd.amplitude_deg <= 60 or hd.period <= 0 or hd.side_free_seconds < 0:
+            raise ValueError("head: amplitude_deg in [0, 60], period > 0, side_free_seconds >= 0")
         if self.loop.rate_hz <= 0:
             raise ValueError("loop: rate_hz must be > 0")
         if self.corner.turns_before_big_turn < 1:

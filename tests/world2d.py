@@ -63,13 +63,16 @@ class World:
     walls: list[Seg]
     start: tuple[float, float, float]           # x, y, yaw
 
-    def render(self, x: float, y: float, yaw: float) -> DepthFrame:
+    def render(self, x: float, y: float, yaw: float, head: float = 0.0) -> DepthFrame:
+        """``head`` = head yaw relative to the trunk (rad, + = left); the sensor turns about its own
+        position (the neck offset is ignored)."""
         c, s = math.cos(yaw), math.sin(yaw)
         sx = x + c * SENSOR_FORWARD - s * SENSOR_LEFT
         sy = y + s * SENSOR_FORWARD + c * SENSOR_LEFT
+        ch, sh = math.cos(yaw + head), math.sin(yaw + head)
         dist, status = [], []
         for bx, by, bz in BEAMS:
-            dx, dy = c * bx - s * by, s * bx + c * by
+            dx, dy = ch * bx - sh * by, sh * bx + ch * by
             t = SENSOR_HEIGHT / -bz if bz < -1e-9 else math.inf
             for w in self.walls:
                 t = min(t, _ray_seg(sx, sy, dx, dy, w))
@@ -102,6 +105,20 @@ def worlds() -> list[World]:
     return out
 
 
+def chair_legs() -> World:
+    """A dining room: a table and six chairs, i.e. 28 legs of 3 cm, the thing a 45° view loses
+    beside the body (finding 6)."""
+    w = box(0, 0, 5, 4)
+    legs = []
+    for tx, ty in ((1.6, 1.4), (1.6, 2.6), (3.4, 1.4), (3.4, 2.6)):            # table, 1.8 x 1.2 m
+        legs.append((tx, ty))
+    for cx, cy in ((2.0, 0.9), (3.0, 0.9), (2.0, 3.1), (3.0, 3.1), (1.1, 2.0), (3.9, 2.0)):   # chairs, 0.4 m
+        legs += [(cx - 0.2, cy - 0.2), (cx + 0.2, cy - 0.2), (cx - 0.2, cy + 0.2), (cx + 0.2, cy + 0.2)]
+    for lx, ly in legs:
+        w += box(lx - 0.015, ly - 0.015, lx + 0.015, ly + 0.015)
+    return World("dining room (legs)", w, (0.5, 0.5, 0.6))
+
+
 @dataclass
 class Result:
     world: str
@@ -116,10 +133,23 @@ class Result:
         return len(self.cells) * 0.0625
 
 
+HEAD_TAU = 0.12          # the head follows its command with this time constant (s; robotd low-passes it)
+HEAD_RATE = 4.0          # ... and at most this fast (rad/s)
+
+
+def _pose(head: float):
+    from microduck_brain.depth import Pose
+
+    return Pose((SENSOR_FORWARD, SENSOR_LEFT, SENSOR_HEIGHT - 0.12),
+                (math.cos(head / 2), 0.0, 0.0, math.sin(head / 2)), (0.0, 0.0, -1.0), 0.12)
+
+
 def run(world: World, cfg: Config, seconds: float = 300.0, seed: int = 0, drift: float = 0.04,
-        dt: float = 0.05, frame_every: int = 1, recorder=None) -> Result:
+        dt: float = 0.05, frame_every: int = 1, recorder=None, with_pose: bool = False,
+        body_radius: float = BODY_RADIUS) -> Result:
     """Closed loop: frame -> brain -> plant. ``drift`` = the gait's yaw drift while walking (rad/s),
-    randomised in sign and size per seed, like the real policy's."""
+    randomised in sign and size per seed, like the real policy's. ``with_pose`` sends a sensor pose
+    (frames.tof) like the real robot does, including where the head looks; head scanning needs it."""
     rng = random.Random(seed)
     x, y, yaw = world.start
     yaw += rng.uniform(-0.5, 0.5)
@@ -128,20 +158,27 @@ def run(world: World, cfg: Config, seconds: float = 300.0, seed: int = 0, drift:
     res = Result(world.name)
     t, n, frame = 0.0, 0, None
     touching = False
+    head, head_cmd = 0.0, 0.0
+    pose = _pose(0.0) if with_pose else None
     while t < seconds:
         if n % frame_every == 0:
-            frame = world.render(x, y, yaw)
+            frame = world.render(x, y, yaw, head)
+            pose = _pose(head) if with_pose else None
         n += 1
         wyaw = (yaw + math.pi) % (2 * math.pi) - math.pi
-        inp = Inputs(t, frame, True, "", wyaw, None, (x, y))
+        inp = Inputs(t, frame, True, "", wyaw, pose, (x, y))
         cmd = brain.tick(inp)
+        if cmd.head_yaw is not None:
+            head_cmd = cmd.head_yaw
+        step = (head_cmd - head) * min(1.0, dt / HEAD_TAU)
+        head += max(-HEAD_RATE * dt, min(HEAD_RATE * dt, step))
         if recorder is not None:
             recorder.write(inp, cmd, brain.state_name)
         if cmd.kind == "move":
             v = FORWARD_RATIO * cmd.vx
             yaw += (TURN_RATIO * cmd.vyaw + (bias if cmd.vx > 0 else 0.0)) * dt
             nx, ny = x + v * math.cos(yaw) * dt, y + v * math.sin(yaw) * dt
-            if world.clearance(nx, ny) >= BODY_RADIUS:
+            if world.clearance(nx, ny) >= body_radius:
                 res.distance += math.hypot(nx - x, ny - y)
                 x, y = nx, ny
                 touching = False

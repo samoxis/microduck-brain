@@ -21,6 +21,8 @@ What the robot does with it:
 - **records every decision** for exact offline replay and plots;
 - optionally **explores**: prefers directions it has not been to yet (`[explore]`, off by default
   until measured in the full simulator);
+- optionally **scans with its head** while walking (`[head]`, off by default): the sensor is on the
+  head, so turning it left and right covers what the 45° view misses beside the legs;
 - has an **observe mode** for a first run on a physical robot: it decides and records, but sends the
   robot nothing.
 
@@ -45,7 +47,9 @@ from the robot's own odometry. The recording is in [`docs/`](docs/) and replays 
 | Flat 2-D worlds, real beam geometry, measured real/commanded ratios ([`tests/world2d.py`](tests/world2d.py)) | Exploration on vs. off: 4 rooms × 30 seeds × 600 s | Area covered **+71%** (35.0 vs 20.5 m² summed over the 4 rooms, mean of 3 × 10 seeds), **0 contacts** in 120 runs either way |
 | Full simulator, official walking policies (run by the author), apartment, 600 s each | Exploration off vs. on, first version (3fedf98) | Area 7.31 vs 7.50 m² (+2.6%, within single-run noise); avoidances 194 vs 327; 3 bends but 27 "aborts" — a bug: the abort rule also reset the ordinary heading hold near walls. Fixed; to be re-measured |
 | Full simulator in a 4-core cloud container (`tools/ab_full_sim.sh`), 3 + 3 runs of 600 s, before the wall map | Exploration off vs. on | Area 6.42 ± 1.79 vs 7.94 ± 0.83 m²: ranges overlap, no signal at n = 3. The container is marginal: robotd's loop dipped below 45 Hz 1–3 times a run (reported as unhealthy, not falls) |
-| Test suite | 197 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
+| Flat 2-D worlds, a dining room with 28 table and chair legs of 3 cm, body 11 cm wide | Head scan off vs. on (±25°, 2.5 s), 30 runs × 600 s each | Contacts with legs **2 → 0** (at 12 cm: 3 → 1 in 15 runs); area +5–15%; but 2–4× more full stops, since it now sees what it used to brush past |
+| Full simulator, cloud container, head scan on, 300 s | Does the policy keep its balance, does the sensor turn? | 0 falls; measured head yaw −27°…+29° for ±25° commanded, 0.3 s behind, 4° rms; replay exact |
+| Test suite | 207 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
 
 **What has not been verified**: anything on a physical robot (the author doesn't have one yet). In
 the full-simulator run, contacts with furniture are not measured (the headless simulator doesn't report
@@ -192,10 +196,14 @@ cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtur
   been seen. Glass is invisible to the sensor.
 - After a fall the brain waits; it does not try to stand the robot up. Pollen's stack has no
   get-up policy (the policies are walk/stand, sit-stand, ground pick, kicks and the roulade), and a
-  brain can only ask for movements that exist; getting up needs a policy trained for it.
+  brain can only ask for movements that exist. However, `microduck_rl`'s velstand config says the
+  deployed walk was trained to "fall in a way that protects the servos, and get up gently": with
+  robotd's default (a fall is reported, not a gate) the walk may already get up by itself. Not yet
+  verified.
 - Exploration is measured only in flat 2-D worlds (ideal floor, no sway, perfect odometry). Its map is
   in odometry coordinates, so it drifts with the odometry, and it is forgotten after a fall.
-- The 45° field of view is narrow while turning (finding 6).
+- The 45° field of view is narrow while turning (finding 6). The head scan addresses it, but is
+  measured only in the 2-D worlds so far (contacts) and checked for balance in the full simulator.
 
 ## How this was built
 

@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 
-from .depth import BEAMS, DepthFrame, Pose, View, drop_zones, low_obstacles
+from .depth import BEAMS, DepthFrame, Pose, View, drop_zones, head_yaw, low_obstacles, rotate
 
 LOW = "low"
 DROP = "drop"
@@ -91,10 +91,16 @@ class HazardMap:
     def _detect(self, kind: str, frame: DepthFrame, pose: Pose | None) -> list[tuple[float, float]]:
         """(forward from the sensor, left of the axis) for every zone of this kind in the frame."""
         sl = self.cfg.obstacle.sensor_lateral
+        yaw = head_yaw(pose) if self.cfg.head.scan else 0.0      # where the head looks
+
+        def trunk(f: float, l: float) -> tuple[float, float]:
+            f, l = rotate(f, l, yaw)
+            return f, l + sl
+
         if kind == LOW:
-            return [(o.forward, o.lateral + sl) for o in low_obstacles(frame, pose, self.cfg)]
+            return [trunk(o.forward, o.lateral) for o in low_obstacles(frame, pose, self.cfg)]
         if kind == DROP:
-            return [(d.forward, d.lateral + sl) for d in drop_zones(frame, pose, self.cfg)]
+            return [trunk(d.forward, d.lateral) for d in drop_zones(frame, pose, self.cfg)]
         o = self.cfg.obstacle
         out = []
         for r in range(o.first_row, o.last_row + 1):
@@ -103,7 +109,7 @@ class HazardMap:
                 if d is None or not math.isfinite(d):
                     continue
                 bx, by, _ = BEAMS[r * frame.cols + c]
-                f, lat = d * bx, d * by + sl
+                f, lat = trunk(d * bx, d * by)
                 if f < SIDE_LOOKAHEAD and abs(lat) < SIDE_BAND:
                     out.append((f, lat))
         return out

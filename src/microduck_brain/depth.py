@@ -70,6 +70,31 @@ class View:
         return "left" if self.left_free > self.right_free else "right"
 
 
+def head_yaw(pose: "Pose | None") -> float:
+    """How far the sensor looks to the left of the trunk's axis (rad), from frames.tof's quaternion:
+    the yaw of the sensor's forward axis in the trunk frame. 0 without a pose."""
+    if pose is None:
+        return 0.0
+    w, x, y, z = pose.sensor_quat
+    n = w * w + x * x + y * y + z * z
+    return math.atan2(2 * (x * y + w * z) / n, 1 - 2 * (y * y + z * z) / n)
+
+
+def rotate(f: float, l: float, yaw: float) -> tuple[float, float]:
+    """A point (forward, left) in the sensor's horizontal frame, in the trunk's. ``yaw`` = 0 returns
+    it unchanged, bit for bit (cos 0 = 1, sin 0 = 0), which keeps old recordings replaying exactly."""
+    if yaw == 0.0:
+        return f, l
+    c, s = math.cos(yaw), math.sin(yaw)
+    return c * f - s * l, s * f + c * l
+
+
+def column_azimuth(col: int) -> float:
+    """Azimuth of a column's centre in the sensor frame (rad, + = left); column 0 is the left."""
+    half = math.radians(FOV_DEG / 2.0 - FOV_DEG / 8 / 2.0)
+    return half - col * (2.0 * half / 7.0)
+
+
 def _column_minima(frame: DepthFrame, cfg: Obstacle, cols: range) -> list[float]:
     out = []
     for c in cols:
@@ -83,9 +108,11 @@ def _column_minima(frame: DepthFrame, cfg: Obstacle, cols: range) -> list[float]
     return out
 
 
-def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None) -> View:
+def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None, yaw: float = 0.0) -> View:
     """Analyse the wall rows of a frame. ``threshold`` = distance below which a zone is "near"
-    (``stop_distance`` by default; ``clear_distance`` when deciding a turn is finished)."""
+    (``stop_distance`` by default; ``clear_distance`` when deciding a turn is finished). ``yaw`` =
+    where the head looks (rad, + = left, see ``head_yaw``): the returns are rotated into the trunk's
+    frame before deciding what is "ahead" and which side a column is on."""
     if frame.rows != 8 or frame.cols != 8:
         raise ValueError(f"expected an 8x8 frame, got {frame.rows}x{frame.cols}")
     threshold = cfg.stop_distance if threshold is None else threshold
@@ -107,8 +134,9 @@ def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None) ->
             if d is None:
                 continue
             bx, by, _ = BEAMS[r * frame.cols + c]
-            if abs(d * by + cfg.sensor_lateral) <= cfg.corridor_half_width:
-                ranges.append(d * bx)
+            fx, fy = rotate(d * bx, d * by, yaw)
+            if abs(fy + cfg.sensor_lateral) <= cfg.corridor_half_width:
+                ranges.append(fx)
     ranges.sort()
     nearest = ranges[0] if ranges else None
     k = max(1, cfg.min_zones)
@@ -118,8 +146,14 @@ def analyse(frame: DepthFrame, cfg: Obstacle, threshold: float | None = None) ->
 
     # How free each half is: the mean of the per-column nearest ranges. Failed zones don't count;
     # a half with no measurement at all scores 0 (never chosen).
-    left = _column_minima(frame, cfg, range(0, 4))
-    right = _column_minima(frame, cfg, range(4, 8))
+    if yaw == 0.0:
+        left = _column_minima(frame, cfg, range(0, 4))
+        right = _column_minima(frame, cfg, range(4, 8))
+    else:   # a column belongs to the side it points to, in the trunk's frame
+        left_cols = [c for c in range(8) if column_azimuth(c) + yaw > 0]
+        right_cols = [c for c in range(8) if column_azimuth(c) + yaw <= 0]
+        left = _column_minima(frame, cfg, left_cols)
+        right = _column_minima(frame, cfg, right_cols)
     left_free = sum(left) / len(left) if left else 0.0
     right_free = sum(right) / len(right) if right else 0.0
     return View(blocked, blind, nearest, front, left_free, right_free)

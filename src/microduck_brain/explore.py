@@ -43,12 +43,14 @@ class Explorer:
     def blocked_cells(self) -> int:
         return len(self._blocked)
 
-    def update_walls(self, frame, pos, yaw: float | None, sensor_forward: float, obstacle_cfg) -> None:
-        """Remember the cells where the wall rows of a new frame hit something."""
+    def update_walls(self, frame, pos, yaw: float | None, sensor_forward: float, obstacle_cfg,
+                     head: float = 0.0) -> None:
+        """Remember the cells where the wall rows of a new frame hit something. ``head`` = where the
+        head looks, relative to the trunk (rad, + = left)."""
         if frame is None or frame is self._last_frame or pos is None or yaw is None:
             return
         self._last_frame = frame
-        from .depth import BEAMS      # local import: depth imports nothing from here, but keep it lazy
+        from .depth import BEAMS, rotate
 
         c, s = math.cos(yaw), math.sin(yaw)
         o = obstacle_cfg
@@ -58,7 +60,8 @@ class Explorer:
                 if d is None or not math.isfinite(d) or d > WALL_RANGE:
                     continue
                 bx, by, _ = BEAMS[r * frame.cols + col]
-                fx, fy = sensor_forward + d * bx, d * by + o.sensor_lateral
+                fx, fy = rotate(d * bx, d * by, head)
+                fx, fy = sensor_forward + fx, fy + o.sensor_lateral
                 key = self._cell(pos[0] + c * fx - s * fy, pos[1] + s * fx + c * fy)
                 self._blocked.pop(key, None)
                 self._blocked[key] = 0.0

@@ -93,6 +93,16 @@ bend_min_clear = 0.7      # ... only if this much is clear ahead and on that sid
 max_bend_deg = 60.0       # the largest bend of the heading towards a less visited direction (degrees)
 novelty_margin = 0.3      # bend only if that direction is this much more novel (0..1) than straight ahead
 
+[head]
+# Scan with the head while walking: the ToF sensor is on the head, so turning it left and right covers
+# what the 45° view misses beside the legs (finding 6). The walking policy is trained with head
+# commands (deltas from home, up to ±1.4 rad of yaw). Needs frames.tof in robot.state to know where the
+# head looks; without it the head stays centred. Off by default.
+scan = false
+amplitude_deg = 25.0      # how far left and right the head turns (degrees)
+period = 2.5              # one full left-right-left sweep (s)
+side_free_seconds = 3.0   # while the head looks to one side, remember how free the other side was this long
+
 [safety]
 tof_timeout = 0.5         # a depth frame older than this => stop (never walk blind)
 state_timeout = 1.0       # robot.state silent this long => treated as unsafe

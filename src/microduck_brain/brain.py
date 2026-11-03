@@ -30,7 +30,7 @@ import math
 from dataclasses import dataclass, field
 
 from .config import Config
-from .depth import DepthFrame, Pose, View, analyse
+from .depth import DepthFrame, Pose, View, analyse, column_azimuth, head_yaw
 from .explore import Explorer
 from .hazards import LOW, SIDE, HazardMap
 
@@ -51,6 +51,7 @@ class Command:
     kind: str                     # "move" | "stop" | "none"
     vx: float = 0.0
     vyaw: float = 0.0
+    head_yaw: float | None = None  # robot.head yaw target (rad, + = left), None = send no head command
 
 
 NONE = Command("none")
@@ -360,6 +361,9 @@ class Brain:
         self.side_busy_until = {1.0: -1e9, -1.0: -1e9}   # exploration: no bends towards that side until then
         self.bend: tuple[float, float] | None = None     # exploration: (started at, angle) of the bend in progress
         self.explore_log: list[tuple[float, str, float, str]] = []   # (t, event, angle rad, reason), drained by the runner
+        self.head_now = 0.0             # where the head looks, measured (rad, + = left); 0 unless scanning
+        self._scan_t = 0.0              # time spent scanning in the current forward stretch
+        self._side_free: dict[str, tuple[float, float]] = {}   # side -> (free, t), while scanning
         self._pos: tuple[float, float] | None = None
         self.states: dict[str, State] = {}
         for s in (Hold(), Forward(), Brake(), Turn(), BigTurn()):
@@ -417,8 +421,39 @@ class Brain:
         """The view ahead: walls from the upper rows plus low objects and drops (seen now or
         remembered), see ``hazards.py``."""
         o = self.cfg.obstacle
-        view = analyse(inputs.frame, o, threshold)
+        view = analyse(inputs.frame, o, threshold, self.head_now)
+        if self.cfg.head.scan:
+            view = self._remember_sides(view, inputs.now)
         return self.hazards.merge(view, o.stop_distance if threshold is None else threshold)
+
+    def _remember_sides(self, view: View, now: float) -> View:
+        """While the head looks to one side, the other half of the view has few or no columns: use
+        what that side looked like the last time the head saw it (within side_free_seconds)."""
+        from dataclasses import replace
+
+        out = {}
+        for side in ("left", "right"):
+            cols = sum(1 for c in range(8) if (column_azimuth(c) + self.head_now > 0) == (side == "left"))
+            value = view.left_free if side == "left" else view.right_free
+            if cols >= 2:
+                self._side_free[side] = (value, now)
+                out[side] = value
+            else:
+                old = self._side_free.get(side)
+                out[side] = old[0] if old and now - old[1] <= self.cfg.head.side_free_seconds else value
+        return replace(view, left_free=out["left"], right_free=out["right"])
+
+    def _head_target(self, inputs: Inputs, dt: float) -> float | None:
+        """Scan only while walking forward with a pose (without frames.tof the brain can't know where
+        the head looks); anywhere else, centre the head."""
+        h = self.cfg.head
+        if not h.scan:
+            return None
+        if self.state.name != "forward" or inputs.pose is None:
+            self._scan_t = 0.0
+            return 0.0
+        self._scan_t += dt
+        return math.radians(h.amplitude_deg) * math.sin(2 * math.pi * self._scan_t / h.period)
 
     @property
     def low_items(self) -> list[tuple[float, float]]:
@@ -467,14 +502,16 @@ class Brain:
             self.stats.state_seconds[n] = self.stats.state_seconds.get(n, 0.0) + dt
             if n == "forward":
                 self.stats.forward_seconds += dt
+        tick_dt = 0.0 if self._last_now is None else max(0.0, min(0.2, inputs.now - self._last_now))
         self._last_now = inputs.now
         self._track_yaw(inputs.yaw)
+        self.head_now = head_yaw(inputs.pose) if self.cfg.head.scan else 0.0
         self.hazards.update(inputs.frame, inputs.pose, inputs.pos, self.yaw, inputs.safe, inputs.now)
         self._pos = inputs.pos
         if self.cfg.explore.enabled and inputs.safe:
             self.explorer.update(inputs.pos, inputs.now)
             sx = inputs.pose.sensor_pos[0] if inputs.pose else self.cfg.low.nominal_sensor_forward
-            self.explorer.update_walls(inputs.frame, inputs.pos, self.yaw, sx, self.cfg.obstacle)
+            self.explorer.update_walls(inputs.frame, inputs.pos, self.yaw, sx, self.cfg.obstacle, self.head_now)
             self.mark_busy_sides(inputs.now)
 
         if not self._started:
@@ -497,4 +534,8 @@ class Brain:
         cmd, nxt = self.state.step(self, inputs)
         if nxt is not None:
             self._goto(nxt, inputs)
+        head = self._head_target(inputs, tick_dt)
+        if head is not None:
+            from dataclasses import replace
+            cmd = replace(cmd, head_yaw=head)
         return cmd

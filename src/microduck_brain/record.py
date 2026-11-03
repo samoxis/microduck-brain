@@ -54,7 +54,8 @@ class Recorder:
             "safe": inp.safe,
             "yaw": inp.yaw,
             "pos": list(inp.pos) if inp.pos is not None else None,
-            "cmd": [cmd.kind, round(cmd.vx, 5), round(cmd.vyaw, 5)],
+            "cmd": [cmd.kind, round(cmd.vx, 5), round(cmd.vyaw, 5)]
+                   + ([round(cmd.head_yaw, 5)] if cmd.head_yaw is not None else []),
             "state": state,
         }
         if inp.safe_reason:
@@ -102,8 +103,8 @@ def read(path: str | Path) -> Iterator[Tick]:
                 now=r["t"], frame=frame, safe=r["safe"], safe_reason=r.get("why", ""),
                 yaw=r["yaw"], pose=pose, pos=tuple(r["pos"]) if r["pos"] is not None else None,
             )
-            kind, vx, vyaw = r["cmd"]
-            yield Tick(inp, Command(kind, vx, vyaw), r["state"])
+            kind, vx, vyaw, *head = r["cmd"]
+            yield Tick(inp, Command(kind, vx, vyaw, head[0] if head else None), r["state"])
 
 
 @dataclass
@@ -122,6 +123,9 @@ def replay(path: str | Path, cfg: Config) -> Replay:
         cmd = out.brain.tick(tick.inputs)
         out.ticks += 1
         same = cmd.kind == tick.cmd.kind and abs(cmd.vx - tick.cmd.vx) < 1e-4 and abs(cmd.vyaw - tick.cmd.vyaw) < 1e-4
+        if (cmd.head_yaw is None) != (tick.cmd.head_yaw is None) or (
+                cmd.head_yaw is not None and abs(cmd.head_yaw - tick.cmd.head_yaw) > 1e-4):
+            same = False
         if not same:
             out.differing += 1
             if out.first_difference is None:

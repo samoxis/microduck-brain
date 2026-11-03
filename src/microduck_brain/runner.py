@@ -139,7 +139,12 @@ class Runner:
 
     # --- output ----------------------------------------------------------------
     def _send(self, cmd) -> None:
-        if cmd.kind == "none" or self.observe:
+        if self.observe:
+            return
+        if cmd.head_yaw is not None:
+            # Deltas from the home pose (radians, trunk frame); the walking policy is trained with them.
+            self._notify("robot.head", {"neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": cmd.head_yaw, "head_roll": 0.0})
+        if cmd.kind == "none":
             return
         try:
             if not self.link.connected:
@@ -151,6 +156,14 @@ class Runner:
         except (OSError, RpcError) as e:
             log.warning("could not send %s: %s", cmd.kind, e)
 
+    def _notify(self, method: str, params: dict) -> None:
+        try:
+            if not self.link.connected:
+                self.link.connect()
+            self.link.notify(method, params)
+        except (OSError, RpcError) as e:
+            log.warning("could not send %s: %s", method, e)
+
     def send_stop(self) -> None:
         """Safe stop on exit: zero velocity + robot.stop, reconnecting once if needed."""
         if self.observe:
@@ -160,6 +173,8 @@ class Runner:
                 if not self.link.connected:
                     self.link.connect()
                 self.link.notify("robot.move", {"vx": 0.0, "vy": 0.0, "vyaw": 0.0})
+                if self.cfg.head.scan:
+                    self.link.notify("robot.head", {"neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "head_roll": 0.0})
                 self.link.call("robot.stop")
                 return
             except (OSError, RpcError):
