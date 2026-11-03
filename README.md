@@ -53,6 +53,7 @@ from the robot's own odometry. The recording is in [`docs/`](docs/) and replays 
 | Flat 2-D worlds, a dining room with 28 table and chair legs of 3 cm, body 11 cm wide | Head scan off vs. on (±25°, 2.5 s), 30 runs × 600 s each | Contacts with legs **2 → 0** (at 12 cm: 3 → 1 in 15 runs); area +5–15%; but 2–4× more full stops, since it now sees what it used to brush past |
 | Full simulator, cloud container, head scan on, 300 s | Does the policy keep its balance, does the sensor turn? | 0 falls; measured head yaw −27°…+29° for ±25° commanded, 0.3 s behind, 4° rms; replay exact |
 | Full simulator, cloud container (`tools/push/push_trials.sh`) | Shoved sideways, ±1–3 m/s, 10 trials from a fresh simulator | Fell every time; **got up by itself 9 of 10** (2.0–2.8 s), once stuck on its side. With the brain running: walking again 4 s after the shove |
+| Full simulator, cloud container, brain running, 2 × 20 shoves (±1–3 m/s) | `[recover]` off vs. on | Recovery off: 19 falls, all up by themselves in 1.9–3.1 s. Recovery on: 18 falls, 13 up by themselves; **5 stuck on their side** (gravity horizontal, 5–6 s without progress) **and all 5 up after one recovery**, 0.5 s after the policy restarts (10–13 s after the shove). Over all 47 falls so far, 6 stuck on a side: 13% |
 | Test suite | 229 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
 
 **What has not been verified**: anything on a physical robot (the author doesn't have one yet). In
@@ -217,7 +218,8 @@ cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtur
   ([`tools/push/push_trials.sh`](tools/push/push_trials.sh)), 10 sideways shoves of ±1–3 m/s each
   knocked it over; it got up by itself 9 times, in 2.0–2.8 s, and once stayed on its side. With the
   brain running, it walked on 4 s after a shove (the hold, then `resume_delay`). A duck stuck on its
-  side is not handled: the brain waits.
+  side is handled only with `[recover]` on (measured in the simulator only: 5 of 5). On a physical
+  robot, `robot.init` drives the joints against the floor, as robotd's own landing sequence does.
 - Exploration is measured only in flat 2-D worlds (ideal floor, no sway, perfect odometry). Its map is
   in odometry coordinates, so it drifts with the odometry, and it is forgotten after a fall.
 - The 45° field of view is narrow while turning (finding 6). The head scan addresses it, but is
