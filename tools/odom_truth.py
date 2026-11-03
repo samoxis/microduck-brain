@@ -1,10 +1,9 @@
 """How far the odometry drifted from where the robot really was, in a full-simulator run.
 
 Needs the run's recording and a truth file written by tools/push/sitecustomize.py (DUCK_TRUTH_FILE:
-"sim_time x y yaw" of the trunk, every 0.25 s). The two clocks differ (the brain's is monotonic, the
-simulator's is its own), so they are aligned on the moment the robot starts moving in both, and the
-truth is put into the odometry's frame with the pose at that moment. The simulator runs at real time
-(full_sim_run.sh checks it), so after that the two clocks advance together.
+"monotonic_s x y yaw sim_time" of the trunk, every 0.25 s). The first column is the same clock as the
+brain's (CLOCK_MONOTONIC, one machine), so the two line up in time directly; the truth is put into the
+odometry's frame with the pose at the recording's first sample, where the odometry is still exact.
 
     uv run python tools/odom_truth.py runs/<run>/run.jsonl.gz runs/<run>/truth.txt [--json out.json]
 """
@@ -33,16 +32,17 @@ def _start(samples, eps=0.02):
 
 
 def align(odom, truth):
-    """Truth samples in the odometry's frame and clock: [(t_brain, x, y, yaw)]."""
-    io, it = _start(odom), _start(truth)
-    to0, xo, yo, ao = odom[io]
-    tt0, xt, yt, at = truth[it]
+    """Truth samples in the odometry's frame: [(t, x, y, yaw)], posed on the first odometry sample."""
+    to0, xo, yo, ao = odom[0]
+    times = [s[0] for s in truth]
+    it = min(len(truth) - 1, bisect.bisect_left(times, to0))
+    _, xt, yt, at = truth[it][:4]
     d = ao - at
     c, s = math.cos(d), math.sin(d)
     out = []
-    for t, x, y, a in truth:
+    for t, x, y, a, *_ in truth:
         dx, dy = x - xt, y - yt
-        out.append((t - tt0 + to0, xo + c * dx - s * dy, yo + s * dx + c * dy, a + d))
+        out.append((t, xo + c * dx - s * dy, yo + s * dx + c * dy, a + d))
     return out
 
 

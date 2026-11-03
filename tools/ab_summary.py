@@ -31,10 +31,22 @@ METRICS = [
     ("replay_differing", lambda s, r: s["commands_differing_from_recording"], False),
     ("avoids/min after turn in place", lambda s, r: (r or {}).get("after_every_turn_in_place", {}).get("avoids_per_min_after"), False),
     ("avoids/min elsewhere", lambda s, r: (r or {}).get("after_every_turn_in_place", {}).get("avoids_per_min_elsewhere"), False),
+    ("contacts: furniture", lambda s, r: contacts(s["_dir"], "furniture"), False),
+    ("contacts: toys", lambda s, r: contacts(s["_dir"], "toy"), False),
+    ("contacts: stairs", lambda s, r: contacts(s["_dir"], "stair"), False),
+    ("odometry error, final (m)", lambda s, r: s.get("_odom", {}).get("position_error_m", {}).get("final"), False),
     ("bends", lambda s, r: s["replayed"].get("exploration_bends"), None),
     ("bends_refused", lambda s, r: s["replayed"].get("exploration_bends_refused"), None),
     ("side_choices", lambda s, r: s["replayed"].get("exploration_side_choices"), None),
 ]
+
+
+def contacts(d: Path, kind: str) -> int | None:
+    """New contacts of a kind (furniture, toy, stair) logged by MEASURE=1 runs, while the brain ran."""
+    p = d / "contacts.txt"
+    if not p.exists():
+        return None
+    return sum(1 for line in p.read_text().splitlines() if line.split()[1:2] == [kind])
 
 
 def load(d: Path, key: str = "explore.enabled") -> tuple[str, dict, dict | None]:
@@ -42,6 +54,10 @@ def load(d: Path, key: str = "explore.enabled") -> tuple[str, dict, dict | None]
     sec, k = key.split(".")
     label = "on" if cfg.get(sec, {}).get(k, False) else "off"
     s = json.loads((d / "summary.json").read_text())
+    s["_dir"] = d
+    ot = d / "odom_truth.json"
+    if ot.exists():
+        s["_odom"] = json.loads(ot.read_text())
     rp = d / "explore_report.json"
     r = json.loads(rp.read_text()) if rp.exists() and rp.stat().st_size else None
     return label, s, r
