@@ -175,7 +175,8 @@ def test_without_pitch_awareness_a_pitched_head_reads_the_floor_as_a_wall():
 @pytest.mark.parametrize("hp,closest", [(0.0, 0.50), (0.35, 0.20), (0.5, 0.16)])
 def test_looking_down_brings_close_cubes_into_view(hp, closest):
     """Real MuJoCo frames: a 7 cm cube is invisible under 45 cm with the head level (finding 3);
-    pitched 20 deg down it is seen from 20 cm, with no gap up to 60 cm."""
+    pitched 20 deg down it is seen from 20 cm to the gate at 0.5 m (beyond it the level head sees
+    it, and pitched far-out returns were nearly all false in the apartment)."""
     from microduck_brain.depth import geometry, low_obstacles
 
     cfg = from_dict(PITCH)
@@ -184,7 +185,8 @@ def test_looking_down_brings_close_cubes_into_view(hp, closest):
         if f["shape"] == "cube" and abs(f["head"].get("head_pitch", 0) - hp) < 1e-9:
             hit = bool(low_obstacles(frame_, pose, cfg, geometry(pose, cfg)))
             seen.setdefault(f["x"], []).append(hit)
-    assert all(all(v) for x, v in seen.items() if x >= closest)
+    top = 0.6 if hp == 0.0 else 0.5
+    assert all(all(v) for x, v in seen.items() if closest <= x <= top)
     assert not any(any(v) for x, v in seen.items() if x < closest)
 
 
