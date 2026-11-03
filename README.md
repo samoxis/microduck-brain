@@ -55,7 +55,9 @@ from the robot's own odometry. The recording is in [`docs/`](docs/) and replays 
 | Full simulator, cloud container, head scan on, 300 s | Does the policy keep its balance, does the sensor turn? | 0 falls; measured head yaw −27°…+29° for ±25° commanded, 0.3 s behind, 4° rms; replay exact |
 | Full simulator, cloud container (`tools/push/push_trials.sh`) | Shoved sideways, ±1–3 m/s, 10 trials from a fresh simulator | Fell every time; **got up by itself 9 of 10** (2.0–2.8 s), once stuck on its side. With the brain running: walking again 4 s after the shove |
 | Full simulator, cloud container, brain running, 2 × 20 shoves (±1–3 m/s) | `[recover]` off vs. on | Recovery off: 19 falls, all up by themselves in 1.9–3.1 s. Recovery on: 18 falls, 13 up by themselves; **5 stuck on their side** (gravity horizontal, 5–6 s without progress) **and all 5 up after one recovery**, 0.5 s after the policy restarts (10–13 s after the shove). Over all 47 falls so far, 6 stuck on a side: 13% |
-| Test suite | 229 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
+| Full simulator, cloud container, `MEASURE=1` (true trunk pose), 3 runs of 600 s | How far the odometry drifts | **Very little**: final error 0.03–0.11 m, at most 0.15 m in 600 s (yaw within ~7°) |
+| Same 3 recordings, replayed with `[localize]` on (`tools/odom_truth.py --localize`) | Does matching walls against the map correct it? | **No, it makes it worse**: final 0.23–0.71 m, max 0.46–0.96 m. In the 2-D worlds with deliberate drift it does help (strong drift 0.56–1.10 → 0.30–0.54 m, fresh seeds), but it wanders 0.13–0.33 m on its own: with odometry this good it only adds error. **Off** |
+| Test suite | 238 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
 
 **What has not been verified**: anything on a physical robot (the author doesn't have one yet). In
 the full-simulator run, contacts with furniture are not measured (the headless simulator doesn't report
