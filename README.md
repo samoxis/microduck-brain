@@ -49,6 +49,7 @@ from the robot's own odometry. The recording is in [`docs/`](docs/) and replays 
 | Full simulator in a 4-core cloud container (`tools/ab_full_sim.sh`), 3 + 3 runs of 600 s, before the wall map | Exploration off vs. on | Area 6.42 ± 1.79 vs 7.94 ± 0.83 m²: ranges overlap, no signal at n = 3. The container is marginal: robotd's loop dipped below 45 Hz 1–3 times a run (reported as unhealthy, not falls) |
 | Flat 2-D worlds, a dining room with 28 table and chair legs of 3 cm, body 11 cm wide | Head scan off vs. on (±25°, 2.5 s), 30 runs × 600 s each | Contacts with legs **2 → 0** (at 12 cm: 3 → 1 in 15 runs); area +5–15%; but 2–4× more full stops, since it now sees what it used to brush past |
 | Full simulator, cloud container, head scan on, 300 s | Does the policy keep its balance, does the sensor turn? | 0 falls; measured head yaw −27°…+29° for ±25° commanded, 0.3 s behind, 4° rms; replay exact |
+| Full simulator, cloud container (`tools/push/push_trials.sh`) | Shoved sideways, ±1–3 m/s, 10 trials from a fresh simulator | Fell every time; **got up by itself 9 of 10** (2.0–2.8 s), once stuck on its side. With the brain running: walking again 4 s after the shove |
 | Test suite | 207 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
 
 **What has not been verified**: anything on a physical robot (the author doesn't have one yet). In
@@ -196,10 +197,12 @@ cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtur
   been seen. Glass is invisible to the sensor.
 - After a fall the brain waits; it does not try to stand the robot up. Pollen's stack has no
   get-up policy (the policies are walk/stand, sit-stand, ground pick, kicks and the roulade), and a
-  brain can only ask for movements that exist. However, `microduck_rl`'s velstand config says the
-  deployed walk was trained to "fall in a way that protects the servos, and get up gently": with
-  robotd's default (a fall is reported, not a gate) the walk may already get up by itself. Not yet
-  verified.
+  brain can only ask for movements that exist. It doesn't need to: robotd goes limp as it falls,
+  then poses back to standing and hands over to the walk. In the full simulator
+  ([`tools/push/push_trials.sh`](tools/push/push_trials.sh)), 10 sideways shoves of ±1–3 m/s each
+  knocked it over; it got up by itself 9 times, in 2.0–2.8 s, and once stayed on its side. With the
+  brain running, it walked on 4 s after a shove (the hold, then `resume_delay`). A duck stuck on its
+  side is not handled: the brain waits.
 - Exploration is measured only in flat 2-D worlds (ideal floor, no sway, perfect odometry). Its map is
   in odometry coordinates, so it drifts with the odometry, and it is forgotten after a fall.
 - The 45° field of view is narrow while turning (finding 6). The head scan addresses it, but is
