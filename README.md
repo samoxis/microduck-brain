@@ -65,6 +65,92 @@ the full-simulator run, contacts with furniture are not measured (the headless s
 them), and positions come from odometry, which drifts; the contact counts above are from the kinematic
 runs only.
 
+## Full-simulator A/B tables
+
+Each row: mean ± sd [min–max] over the runs, and "separated" only when the two groups' ranges don't
+overlap. Pollen's simulator in a 4-core cloud container, apartment scene, 600 s runs alternating
+off/on, each from a freshly started simulator, from a frozen copy of the given commit. The run
+folders themselves (recordings, plots) were lost when that copy was refreshed; the tables below are
+the tool's own output, kept verbatim.
+
+**Exploration off vs. on, 5 + 5 runs** ([`docs/ab/explore-0f9f816.txt`](docs/ab/explore-0f9f816.txt))
+
+```text
+commit 0f9f816 — explore.enabled OFF: 5 runs, ON: 5 runs
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          7.04 ± 1.05 [5.25–8.06]      7.74 ± 1.40 [5.56–9.06]         +0.70  noise (ranges overlap)
+cells                            112.60 ± 16.88 [84–129]      123.80 ± 22.38 [89–145]        +11.20  noise (ranges overlap)
+distance_m                       86.17 ± 2.15 [84.82–89.93]   85.04 ± 0.90 [83.47–85.69]      -1.13  noise (ranges overlap)
+bbox_m2                          19.65 ± 1.97 [16.18–20.78]   21.96 ± 2.08 [20.1–24.98]       +2.31  noise (ranges overlap)
+avoidances                       396.40 ± 53.70 [328–468]     388.00 ± 49.92 [315–434]        -8.40  noise (ranges overlap)
+avoidances_with_stop             39.40 ± 15.69 [18–61]        42.00 ± 17.16 [30–72]           +2.60  noise (ranges overlap)
+big_turns                        8.80 ± 4.60 [3–15]           10.00 ± 6.82 [6–22]             +1.20  noise (ranges overlap)
+turn_s                           26.32 ± 10.53 [11–40.5]      28.02 ± 11.42 [22.2–48.4]       +1.70  noise (ranges overlap)
+falls_or_unhealthy               0.20 ± 0.45 [0–1]            0.00 ± 0.00 [0–0]               -0.20  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   28.56 ± 2.58 [25.04–31.54]   29.62 ± 9.36 [13.28–36.31]      +1.06  noise (ranges overlap)
+avoids/min elsewhere             43.57 ± 5.98 [34.56–50.45]   43.93 ± 4.90 [36.02–47.84]      +0.36  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.40 ± 0.89 [0–2]               +0.40  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            8.60 ± 4.16 [4–15]              +8.60  separated
+side_choices                     0.00 ± 0.00 [0–0]            3.00 ± 2.55 [0–6]               +3.00  noise (ranges overlap)
+real-time checks at >= 1.00x: 10
+```
+
+**Head scan off vs. on, 5 + 5 runs** ([`docs/ab/head-scan-3b323ee.txt`](docs/ab/head-scan-3b323ee.txt))
+
+```text
+commit 3b323ee — head.scan OFF: 5 runs, ON: 5 runs
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          7.25 ± 1.30 [5.5–8.94]       5.65 ± 2.26 [3.81–8.56]         -1.60  noise (ranges overlap)
+cells                            116.00 ± 20.80 [88–143]      90.40 ± 36.14 [61–137]         -25.60  noise (ranges overlap)
+distance_m                       85.42 ± 1.42 [83.49–87.28]   84.72 ± 0.22 [84.43–84.99]      -0.70  noise (ranges overlap)
+bbox_m2                          23.27 ± 7.31 [14.49–34.53]   13.12 ± 10.36 [5.53–25.02]     -10.15  noise (ranges overlap)
+avoidances                       365.00 ± 74.17 [251–445]     409.80 ± 31.49 [371–441]       +44.80  noise (ranges overlap)
+avoidances_with_stop             37.80 ± 16.08 [19–60]        43.60 ± 4.16 [38–48]            +5.80  noise (ranges overlap)
+big_turns                        8.80 ± 5.31 [1–15]           8.80 ± 1.30 [8–11]              +0.00  noise (ranges overlap)
+turn_s                           23.50 ± 7.98 [15.4–35.4]     27.92 ± 3.68 [24.8–32.9]        +4.42  noise (ranges overlap)
+falls_or_unhealthy               0.60 ± 1.34 [0–3]            0.00 ± 0.00 [0–0]               -0.60  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   26.29 ± 4.96 [19.58–31.15]   26.79 ± 3.78 [20.87–31.11]      +0.50  noise (ranges overlap)
+avoids/min elsewhere             40.23 ± 8.67 [28.76–49.84]   47.84 ± 4.16 [42.69–52.66]      +7.61  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+side_choices                     0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+real-time checks at >= 1.00x: 10
+```
+
+**Head pitch off vs. on, 3 + 3 runs, contacts and true pose logged** ([`docs/ab/head-pitch-59b7f5d.txt`](docs/ab/head-pitch-59b7f5d.txt))
+
+```text
+commit 59b7f5d — head.pitch OFF: 3 runs, ON: 3 runs
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          8.23 ± 0.90 [7.19–8.75]      4.00 ± 1.09 [3.06–5.19]         -4.23  separated
+cells                            131.67 ± 14.43 [115–140]     64.00 ± 17.35 [49–83]          -67.67  separated
+distance_m                       85.53 ± 0.13 [85.44–85.68]   81.93 ± 0.96 [80.85–82.71]      -3.60  separated
+bbox_m2                          27.54 ± 7.91 [20.95–36.32]   8.03 ± 5.54 [4.47–14.41]       -19.51  separated
+avoidances                       412.67 ± 30.66 [384–445]     405.33 ± 23.18 [384–430]        -7.34  noise (ranges overlap)
+avoidances_with_stop             28.67 ± 3.06 [26–32]         108.33 ± 20.79 [93–132]        +79.66  separated
+big_turns                        6.00 ± 1.00 [5–7]            33.00 ± 7.21 [27–41]           +27.00  separated
+turn_s                           19.87 ± 4.74 [14.4–22.7]     59.13 ± 9.61 [49.3–68.5]       +39.26  separated
+falls_or_unhealthy               0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   28.54 ± 1.33 [27.15–29.8]    37.89 ± 1.98 [35.7–39.54]       +9.35  separated
+avoids/min elsewhere             45.15 ± 3.69 [41.38–48.76]   46.27 ± 4.36 [41.31–49.46]      +1.12  noise (ranges overlap)
+contacts: furniture              1.33 ± 2.31 [0–4]            0.00 ± 0.00 [0–0]               -1.33  noise (ranges overlap)
+contacts: toys                   0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+contacts: stairs                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+odometry error, final (m)        0.08 ± 0.05 [0.05–0.14]      0.09 ± 0.02 [0.07–0.1]          +0.01  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+side_choices                     0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+real-time checks at >= 1.00x: 6
+```
+
+**Recommendation**: keep all three off by default. Exploration and the head scan show no signal in
+the apartment (noise in every metric that matters); the head pitch is clearly worse. Of everything
+in this branch, only `[recover]` measured clearly better (5 of 5 stuck robots up) and is the one
+worth turning on, after a check on a physical robot.
+
 ## Findings worth knowing
 
 These came out of measuring rather than assuming, and each one changed the design:
