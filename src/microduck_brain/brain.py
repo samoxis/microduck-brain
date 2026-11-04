@@ -35,6 +35,7 @@ from .explore import Explorer
 from .hazards import LOW, SIDE, HazardMap
 from .home import Homing
 from .localize import Localizer
+from .gestures import HandGesture
 from .recover import FALLEN, LIMP, Recovery
 
 
@@ -47,6 +48,7 @@ class Inputs:
     yaw: float | None = None      # odom.yaw (rad, + = left), or None if the robot doesn't report it
     pose: Pose | None = None      # sensor pose from robot.state, for the floor geometry
     pos: tuple[float, float] | None = None   # odom.position[0:2] (m), for the hazard memory
+    command: str | None = None    # [commands]: "stop" | "go" | "home" | "toggle", received this tick
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,8 @@ class Stats:
     recoveries_ok: int = 0        # ... after which the robot was safe again
     novel_turns: int = 0          # exploration: turned towards the less visited side (both about equally free)
     forward_seconds: float = 0.0
+    commands: int = 0             # [commands] received and acted on
+    gestures: int = 0             # [gestures] hand gestures recognised
     state_seconds: dict[str, float] = field(default_factory=dict)
 
 
@@ -159,6 +163,8 @@ class Hold(State):
                 self._ok_since = inputs.now
             if inputs.now - self._ok_since >= brain.cfg.safety.resume_delay:
                 # Home already reached (and no fall since): back to standing there, not exploring.
+                if brain.paused:
+                    return cmd, "paused"
                 return cmd, ("home" if brain.homing.arrived else "forward")
         else:
             self._ok_since = None
@@ -398,6 +404,9 @@ class Brake(State):
     def step(self, brain, inputs):
         if inputs.now - self.since < brain.cfg.obstacle.stop_pause:
             return move(0.0, 0.0), None
+        g = brain.gesture
+        if g is not None and g.present and inputs.now - self.since < brain.cfg.obstacle.stop_pause + brain.cfg.gestures.max_seconds:
+            return move(0.0, 0.0), None      # a hand in front: wait for it, don't turn away from it
         view = brain.look(inputs)
         brain.turn_sign = brain.pick_turn(view, brain.cfg.explore.turn_margin)
         if brain.stuck_turn is not None:
@@ -497,6 +506,22 @@ class Face(_Rotation):
         return move(0.0, (1.0 if err > 0 else -1.0) * brain.cfg.motion.turn_speed), None
 
 
+class Paused(State):
+    """Stopped by a command or a gesture: stand still (one robot.stop) until "go"."""
+
+    name = "paused"
+    needs_depth = False
+
+    def enter(self, brain, inputs):
+        self._sent = False
+
+    def step(self, brain, inputs):
+        if not self._sent:
+            self._sent = True
+            return STOP, None
+        return NONE, None
+
+
 def _sane(inputs: Inputs) -> Inputs:
     """A NaN or infinite yaw or position is treated as missing: one NaN yaw would otherwise stay in
     the unwrapped heading for the rest of the run (min/max clamps turn it into a constant turn), and
@@ -557,7 +582,9 @@ class Brain:
         self._close_ahead = False       # head pitch: something within slow_distance ahead, last look
         self._pos: tuple[float, float] | None = None
         self.states: dict[str, State] = {}
-        for s in (Hold(), Forward(), Brake(), Turn(), BigTurn(), Face(), AtHome()):
+        self.paused = cfg.commands.enabled and cfg.commands.start_paused
+        self.gesture = HandGesture(cfg) if cfg.gestures.enabled else None
+        for s in (Hold(), Forward(), Brake(), Turn(), BigTurn(), Face(), AtHome(), Paused()):
             self.register(s)
         self.state: State = self.states["hold"]
         self._last_now: float | None = None
@@ -691,7 +718,7 @@ class Brain:
         h = self.cfg.head
         if not h.pitch:
             return None
-        if inputs.pose is None or self.state.name in ("hold", "home"):
+        if inputs.pose is None or self.state.name in ("hold", "home", "paused"):
             return 0.0
         down = math.radians(h.pitch_down_deg)
         if self.state.name in ("brake", "turn", "bigturn", "face"):
@@ -740,6 +767,43 @@ class Brain:
             side = self.cfg.obstacle.default_turn
         return 1.0 if side == "left" else -1.0
 
+    def _commands(self, inputs: Inputs) -> None:
+        """A command received this tick, or a hand gesture (a toggle), changes what it is doing. The
+        safety guard below still comes first: nothing here makes it walk while it is not safe."""
+        name = inputs.command
+        if self.gesture is not None and self.gesture.update(
+                inputs.frame, inputs.now, self.state.name in ("turn", "bigturn", "face")):
+            self.stats.gestures += 1
+            name = name or "toggle"
+            # The wall returns remembered beside and ahead of the body were the hand: without this,
+            # a "go" would brake at once for a hand that is no longer there.
+            self.hazards.forget_kind(SIDE)
+        if name is None:
+            return
+        if name == "toggle":
+            name = "go" if self.paused or self.state.name in ("paused", "home") else "stop"
+        self.stats.commands += 1
+        if name == "stop":
+            self.paused = True
+            if self.state.name not in ("hold", "paused"):
+                self._goto("paused", inputs)
+        elif name == "go":
+            self.paused = False
+            self.homing.arrived = False       # at home: walk on (homing again only on "home")
+            if self.state.name in ("paused", "home"):
+                self._goto("forward", inputs)
+        elif name == "home":
+            h = self.homing
+            if self.cfg.home.enabled and h.home is not None and not h.abandoned:
+                if not h.active:
+                    h.active, h.arrived, h.since = True, False, inputs.now
+                    self.stats.home_started += 1
+                self.paused = False
+                if self.state.name in ("paused", "home"):
+                    self._goto("forward", inputs)
+            else:
+                self.stats.commands -= 1      # nothing to go home to: ignored
+
     def _goto(self, name: str, inputs: Inputs) -> None:
         if name != "forward":
             self.end_bend(inputs.now, "interrupted", f"state {name}")
@@ -769,7 +833,9 @@ class Brain:
                 and not self.homing.abandoned:
             if self.homing.home is None:
                 self.homing.home = inputs.pos
-            if not self.homing.active and self.stats.forward_seconds >= hm.after_seconds:
+            if not self.homing.active and not self.homing.auto_started \
+                    and self.stats.forward_seconds >= hm.after_seconds:
+                self.homing.auto_started = True
                 self.homing.active, self.homing.since = True, inputs.now
                 self.stats.home_started += 1
         if (self.cfg.explore.enabled or hm.enabled) and inputs.safe:
@@ -783,6 +849,8 @@ class Brain:
         if not self._started:
             self._started = True
             self.state.enter(self, inputs)
+
+        self._commands(inputs)
 
         # The guard: above every state.
         if self.state.name != "hold":

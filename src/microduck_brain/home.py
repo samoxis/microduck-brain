@@ -80,6 +80,7 @@ class Homing:
         self._planned_at = -1e9
         self.suspended_until = -1e9      # homing gives way to an avoidance until then
         self.yield_pending = False       # a stop happened: suspend once it walks again
+        self.auto_started = getattr(self, "auto_started", False)   # after_seconds fired once (kept by reset)
 
     def distance(self, pos) -> float | None:
         if self.home is None or pos is None:

@@ -142,6 +142,29 @@ class Home:
 
 
 @dataclass
+class Commands:
+    """Commands from outside (see commands.py): stop, go, home, toggle over a local socket, for a
+    phone, a voice app or a script. Off by default."""
+
+    enabled: bool = False
+    socket: str = ""             # "" = $XDG_RUNTIME_DIR/microduck-brain.sock, else /tmp/microduck-brain-<uid>.sock
+    start_paused: bool = False   # wait for a "go" (or the hand gesture) before walking
+
+
+@dataclass
+class Gestures:
+    """A hand held close in front of the head, then taken away: stop / go (see gestures.py). Off by
+    default."""
+
+    enabled: bool = False
+    near: float = 0.15           # a hand: closer than this (m), on at least min_fraction of the wall-row zones
+    min_fraction: float = 0.5
+    hold_seconds: float = 0.7    # held at least this long ...
+    max_seconds: float = 4.0     # ... and at most this long (longer: a wall, or the sensor covered)
+    release_seconds: float = 0.3 # gone for this long = taken away: the gesture counts now
+
+
+@dataclass
 class Localize:
     """Correct odometry drift against the walls seen before (see localize.py). Off by default."""
 
@@ -198,6 +221,8 @@ class Config:
     recover: Recover = field(default_factory=Recover)
     home: Home = field(default_factory=Home)
     localize: Localize = field(default_factory=Localize)
+    commands: Commands = field(default_factory=Commands)
+    gestures: Gestures = field(default_factory=Gestures)
     safety: Safety = field(default_factory=Safety)
     loop: Loop = field(default_factory=Loop)
 
@@ -292,6 +317,11 @@ class Config:
             raise ValueError("obstacle: 0 <= min_turn_time <= max_turn_time, max_turn_time > 0, stop_pause >= 0")
         if o.stop_distance <= 0:
             raise ValueError("obstacle: stop_distance > 0")
+        g = self.gestures
+        if not 0.05 <= g.near <= 0.25 or not 0 < g.min_fraction <= 1 or g.hold_seconds <= 0 \
+                or g.max_seconds <= g.hold_seconds or g.release_seconds <= 0:
+            # above 0.25 m a hand is no closer than what the robot brakes for: walls would count
+            raise ValueError("gestures: near in [0.05, 0.25], min_fraction in (0, 1], 0 < hold_seconds < max_seconds, release_seconds > 0")
         if self.corner.turns_before_big_turn < 1:
             raise ValueError("corner: turns_before_big_turn must be >= 1")
 

@@ -67,6 +67,12 @@ class Runner:
         self._warned_shape = False
         self.tof = Stream(tof_sock, "tof.stream", None, self._on_tof, self.stop_event)
         self.state = Stream(robot_sock, "robot.subscribe", {"hz": 25}, self._on_state, self.stop_event)
+        self.commands = None
+        self._status: dict = {}
+        if cfg.commands.enabled:
+            from .commands import CommandServer, default_socket
+
+            self.commands = CommandServer(default_socket(cfg.commands.socket), self.stop_event, self.status)
 
     # --- streams ---------------------------------------------------------------
     def _on_tof(self, method: str, params: dict) -> None:
@@ -153,7 +159,13 @@ class Runner:
             reason = "the robot is limp"
         elif not self._healthy:
             reason = self._health_reason
-        return Inputs(now=now, frame=frame, safe=not reason, safe_reason=reason, yaw=yaw, pose=pose, pos=pos)
+        command = self.commands.pop() if self.commands is not None else None
+        return Inputs(now=now, frame=frame, safe=not reason, safe_reason=reason, yaw=yaw, pose=pose, pos=pos,
+                      command=command)
+
+    def status(self) -> dict:
+        with self._lock:
+            return dict(self._status)
 
     # --- output ----------------------------------------------------------------
     def _send(self, cmd) -> None:
@@ -212,6 +224,8 @@ class Runner:
     def run(self) -> None:
         self.tof.start()
         self.state.start()
+        if self.commands is not None:
+            self.commands.start()
         period = 1.0 / self.cfg.loop.rate_hz
         last_log = self.clock()
         last_name = None
@@ -222,6 +236,14 @@ class Runner:
                 cmd = self.brain.tick(inp)
                 self._send(cmd)
                 name = self.brain.state_name
+                if self.commands is not None:
+                    st = self.brain.stats
+                    with self._lock:
+                        self._status = {"state": name, "paused": self.brain.paused, "safe": inp.safe,
+                                        "why": inp.safe_reason, "walked_s": round(st.forward_seconds, 1),
+                                        "commands": st.commands, "gestures": st.gestures,
+                                        "home": self.brain.homing.home is not None,
+                                        "homing": self.brain.homing.active}
                 for _t, ev, angle, why in self.brain.explore_log:
                     what = ("left" if angle > 0 else "right") if ev == "side" else f"{math.degrees(angle):+.0f}°"
                     log.info("explore: %s %s%s", ev, what, f" ({why})" if why else "")
@@ -246,6 +268,8 @@ class Runner:
                 self.send_stop()
             finally:
                 self.stop_event.set()
+                if self.commands is not None and self.commands.is_alive():
+                    self.commands.join(1.5)      # it removes its socket file on the way out
                 self.link.close()
                 if self.recorder is not None:
                     self.recorder.close()

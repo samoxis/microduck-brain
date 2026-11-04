@@ -1,0 +1,22 @@
+[commands] and [gestures] (opt-in, off by default), measured 2026-11-04
+
+Commands over the socket, full simulator (MEASURE=1, apartment, 90 s, run 20261104-131555-cmd):
+  "stop" sent by `microduck-brain-cmd` at t = 30.3 s, "go" at 50.6 s (both recorded in the run).
+  True trunk pose: walked 0.67 m in the 8 s before the stop; moved 0.001 m (yaw 0.3 deg) from 1 s
+  after the stop to the go, with 0 robot.move commands sent; walked 0.56 m in the 8 s after the go.
+  brain.status during the pause: state "paused". Replay of the recording: 0 differing commands.
+  Furniture/toy contacts: 0.
+
+Hand gesture, false positives, on every full-simulator recording made so far (67 runs, 8.6 h):
+  first version (near < 0.15 m on >= 50% of the wall-row zones for 0.7-4 s, then gone 0.3 s):
+    2 false gestures, both furniture swept past the head 1-9 cm away while turning in place
+    (ab-autonomy-5f11209/20261104-091436-off at 229 s, ab-explore-0f9f816/20261103-201221-off at 335 s).
+  a presence that overlaps a turn in place does not count: 0 false gestures in 8.6 h.
+  (offline, open loop: the recorded states; closed loop the brain also waits in "brake" while a
+  hand is in front instead of turning away.)
+
+The gesture itself: synthetic frames only (tests/test_commands.py): hand held 1.0 s then taken
+away stops a walking robot (it brakes for the hand, waits, pauses on the release); the same again
+starts it. 0.3 s and 5 s holds do not count. NOT verified: a real hand in front of a real sensor
+(close range, < 5 cm, may read as invalid zones on the VL53L5CX), nor in the full simulator (no hand
+in the scene).

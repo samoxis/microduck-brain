@@ -148,6 +148,25 @@ init_seconds = 2.5        # robot.init ramps over ~2 s: wait this long before st
 verify_seconds = 8.0      # then give the standing policy this long before trying again
 max_attempts = 3          # per fall
 
+[commands]
+# Commands from outside, over a local unix socket (only this user can open it): stop, go, home,
+# toggle. For a phone, a voice app, a script: `microduck-brain-cmd stop`. Every command received is
+# recorded, so a run with commands still replays exactly.
+enabled = false
+socket = ""               # "" = $XDG_RUNTIME_DIR/microduck-brain.sock, else /tmp/microduck-brain-<uid>.sock
+start_paused = false      # stand still until a "go" (or the hand gesture)
+
+[gestures]
+# A hand held close in front of the head (the depth sensor), then taken away: stop if walking, go if
+# stopped. Read from the depth frames alone, so it replays exactly. The robot also brakes for the
+# hand as for any obstacle.
+enabled = false
+near = 0.15               # a hand: closer than this (m) ...
+min_fraction = 0.5        # ... on at least this fraction of the wall-row zones
+hold_seconds = 0.7        # held at least this long ...
+max_seconds = 4.0         # ... and at most this long (longer: a wall, or the sensor covered)
+release_seconds = 0.3     # gone this long = taken away: the gesture counts then
+
 [safety]
 tof_timeout = 0.5         # a depth frame older than this => stop (never walk blind)
 state_timeout = 1.0       # robot.state silent this long => treated as unsafe

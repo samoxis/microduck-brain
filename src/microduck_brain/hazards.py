@@ -132,6 +132,12 @@ class HazardMap:
         self._last_frame = None
         self.items = []
 
+    def forget_kind(self, kind: str) -> None:
+        k = self._kinds[kind]
+        k.first, k.found, k.stored = None, [], None
+        k.points.clear()
+        self.items = [h for h in self.items if h.kind != kind]
+
     def remembered(self, kind: str) -> int:
         return len(self._kinds[kind].points)
 

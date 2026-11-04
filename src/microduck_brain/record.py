@@ -64,6 +64,8 @@ class Recorder:
         }
         if inp.safe_reason:
             rec["why"] = inp.safe_reason
+        if inp.command:
+            rec["c"] = inp.command
         if cmd.kind == "call":
             rec["call"] = [cmd.method, cmd.params or {}]
         if self._first or inp.frame is not self._last_frame:
@@ -132,6 +134,7 @@ def read(path: str | Path) -> Iterator[Tick]:
             inp = Inputs(
                 now=r["t"], frame=frame, safe=r["safe"], safe_reason=r.get("why", ""),
                 yaw=r["yaw"], pose=pose, pos=tuple(r["pos"]) if r["pos"] is not None else None,
+                command=r.get("c"),
             )
             kind, vx, vyaw, *head = r["cmd"]
             method, params = r.get("call", ["", None])

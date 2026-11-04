@@ -12,6 +12,7 @@ dependencies = []  # standard library only, on purpose
 microduck-brain = "microduck_brain.cli:main"
 microduck-brain-replay = "microduck_brain.cli:replay_main"
 microduck-brain-plot = "microduck_brain.cli:plot_main"
+microduck-brain-cmd = "microduck_brain.cli:cmd_main"
 
 [dependency-groups]
 dev = ["pytest>=8"]
