@@ -287,7 +287,13 @@ uv run pytest                                           # the test suite
 uv run python -m tests.world2d --seconds 300            # coverage benchmark, exploration on vs. off
 ```
 
-**On a physical robot, never start with the commands above.** The brain runs on the robot's own
+**On a physical robot, the easiest is the guided first test**: on the duck's own computer, in this
+folder, `bash tools/first_test.sh`. It checks the setup, watches 60 s with the duck on a stand
+(nothing sent to it), checks that recording, and only if everything passes and you say yes lets it
+walk 30 s; then it packs the results into one file to send back. Run end to end against the
+simulator (all checks PASS, 13 s walked, replay 0 differing); not yet on a physical duck.
+
+By hand: **on a physical robot, never start with the commands above.** The brain runs on the robot's own
 computer (robotd and tofd are reached through local unix sockets, `/run/robotd.sock` and
 `/run/tofd/tof.sock`), with uv and Python 3.12 there. Start with `--observe`, the robot standing
 on a stand (held by hand it tilts too much for the check): nothing is sent to the robot, and the
