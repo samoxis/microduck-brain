@@ -9,7 +9,9 @@ odometry's frame with the pose at the recording's first sample, where the odomet
     uv run python tools/odom_truth.py ... --localize     # also the corrected odometry ([localize])
 
 With --localize the recording is replayed through a brain with [localize] on, and its corrected pose
-is compared with the truth too. The correction depends only on the recorded frames and odometry,
+is compared with the truth too. --drift YAW_RATE SCALE first degrades the recorded odometry the way a
+slipping robot's would (its heading gains YAW_RATE rad/s, its distances are scaled by SCALE), on the
+real frames and the real truth, to see what the correction does with drift the simulator lacks. The correction depends only on the recorded frames and odometry,
 not on what the brain then did, so this measures it on the very same run.
 """
 
@@ -51,13 +53,41 @@ def align(odom, truth):
     return out
 
 
-def corrected(run: str) -> list:
+def drifted_ticks(run: str, yaw_rate: float, scale: float):
+    """The recording's ticks with odometry degraded: re-integrated from its own increments."""
+    from dataclasses import replace
+
+    prev = None
+    ox = oy = oa = None
+    t0 = None
+    for t in read(run):
+        inp = t.inputs
+        if inp.pos is None or inp.yaw is None:
+            yield replace(t, inputs=replace(inp, pos=None, yaw=None))
+            continue
+        if prev is None:
+            ox, oy, oa, t0 = inp.pos[0], inp.pos[1], inp.yaw, inp.now
+        else:
+            dx, dy = inp.pos[0] - prev[0], inp.pos[1] - prev[1]
+            da = (inp.yaw - prev[2] + math.pi) % (2 * math.pi) - math.pi
+            step = math.hypot(dx, dy) * scale
+            oa_prev = oa
+            oa = oa + da + yaw_rate * (inp.now - prev[3])
+            # the step in the direction the true odometry moved, rotated by the accumulated error
+            heading = math.atan2(dy, dx) + (oa_prev - prev[2]) if step > 0 else 0.0
+            ox, oy = ox + step * math.cos(heading), oy + step * math.sin(heading)
+        prev = (inp.pos[0], inp.pos[1], inp.yaw, inp.now)
+        wy = (oa + math.pi) % (2 * math.pi) - math.pi
+        yield replace(t, inputs=replace(inp, pos=(ox, oy), yaw=wy))
+
+
+def corrected(run: str, ticks=None) -> list:
     from microduck_brain.brain import Brain
     from microduck_brain.config import from_dict
 
     brain = Brain(from_dict({"localize": {"enabled": True}}))
     out = []
-    for t in read(run):
+    for t in (ticks if ticks is not None else read(run)):
         brain.tick(t.inputs)
         inp = t.inputs
         if inp.pos is None or inp.yaw is None:
@@ -102,10 +132,20 @@ def main() -> int:
     ap.add_argument("truth")
     ap.add_argument("--json")
     ap.add_argument("--localize", action="store_true", help="also the odometry corrected by [localize]")
+    ap.add_argument("--drift", nargs=2, type=float, metavar=("YAW_RATE", "SCALE"),
+                    help="degrade the recorded odometry first (rad/s added to the heading, distance scale)")
     args = ap.parse_args()
-    res = drift(args.run, args.truth)
-    if args.localize:
-        res["corrected"] = drift(args.run, args.truth, corrected(args.run))
+    if args.drift:
+        ticks = list(drifted_ticks(args.run, *args.drift))
+        odom = [(t.inputs.now, t.inputs.pos[0], t.inputs.pos[1], t.inputs.yaw) for t in ticks
+                if t.inputs.pos is not None and t.inputs.yaw is not None]
+        res = drift(args.run, args.truth, odom)
+        if args.localize:
+            res["corrected"] = drift(args.run, args.truth, corrected(args.run, ticks))
+    else:
+        res = drift(args.run, args.truth)
+        if args.localize:
+            res["corrected"] = drift(args.run, args.truth, corrected(args.run))
     print(json.dumps({k: (v if k != "corrected" else {kk: vv for kk, vv in v.items() if kk != "every_10s"})
                       for k, v in res.items() if k != "every_10s"}, indent=2))
     if args.json:
