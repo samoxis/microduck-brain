@@ -1,0 +1,41 @@
+Proposed default profile vs today's defaults, full simulator (cloud container, apartment, MEASURE=1),
+5 + 5 runs of 600 s alternating, commit 40bed33.
+
+  MEASURE=1 RUNS=5 AB_KEY=recover.enabled \
+    AB_SET="recover.enabled=true head.pitch=true head.pitch_while_walking=false" bash tools/ab_full_sim.sh
+
+Runs archived in /root/runs-archive/ab-default-profile-40bed33/.
+
+commit 40bed33 — recover.enabled OFF: 5 runs, ON: 5 runs
+
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          6.68 ± 1.25 [5–8.12]         9.25 ± 1.12 [8–10.19]           +2.57  noise (ranges overlap)
+cells                            106.80 ± 20.02 [80–130]      148.00 ± 17.90 [128–163]       +41.20  noise (ranges overlap)
+distance_m                       85.01 ± 0.57 [84.35–85.74]   84.73 ± 0.59 [84.08–85.58]      -0.28  noise (ranges overlap)
+bbox_m2                          23.85 ± 9.91 [12.77–39.76]   32.52 ± 8.35 [22.17–39.13]      +8.67  noise (ranges overlap)
+avoidances                       399.40 ± 72.29 [322–510]     422.20 ± 34.95 [380–459]       +22.80  noise (ranges overlap)
+avoidances_with_stop             38.00 ± 13.69 [22–53]        38.00 ± 9.64 [29–53]            +0.00  noise (ranges overlap)
+big_turns                        9.20 ± 4.55 [4–14]           7.60 ± 3.51 [4–13]              -1.60  noise (ranges overlap)
+turn_s                           26.06 ± 10.42 [13.7–38.2]    26.00 ± 6.20 [17.2–33.2]        -0.06  noise (ranges overlap)
+falls_or_unhealthy               0.20 ± 0.45 [0–1]            1.40 ± 1.14 [0–3]               +1.20  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   28.83 ± 6.03 [24.2–39.02]    36.00 ± 5.48 [29.92–42.76]      +7.17  noise (ranges overlap)
+avoids/min elsewhere             43.96 ± 11.14 [28.26–56.09]  44.91 ± 4.85 [37.74–50.44]      +0.95  noise (ranges overlap)
+contacts: furniture              0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+contacts: toys                   0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+contacts: stairs                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+odometry error, final (m)        0.13 ± 0.06 [0.07–0.21]      0.09 ± 0.03 [0.06–0.12]         -0.04  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+side_choices                     0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+
+Holds traced (every unsafe tick's reason): 0 falls in all 10 runs. Every hold is "no robot.state"
+at start-up or the container's control loop under 45 Hz: 1 such slow-loop hold in the 5 default
+runs, 7 in the 5 profile runs (0-3 a run). Whether the head commands add load on robotd's loop,
+or it is the container, is not separated here.
+
+Verdict: area +38% (6.68 -> 9.25 m2), but the ranges touch ([5-8.12] vs [8-10.19]): by the rule
+used everywhere here, noise -- just. 0 contacts of any kind either way. With the two earlier
+turn-only A/Bs (4.58 -> 9.56 m2 separated, 6.83 -> 8.96 m2 separated) and the cube-after-turn scene
+(4/5 -> 0/5 hits), the profile is consistently ahead and never worse on contacts. Recovery never
+fired (no fall). Defaults unchanged: that is the author's call.
