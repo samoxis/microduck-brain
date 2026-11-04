@@ -29,6 +29,8 @@ corridor_half_width = 0.14 # "ahead" = any wall return within this of the robot'
 sensor_lateral = 0.0224   # the sensor sits this far left of the robot's axis (m; MJCF `tof` site)
 side_memory_seconds = 3.0 # remember wall returns near the body for this long: a chair leg leaves the field of view ~30 cm before passing the leg
 stuck_seconds = 0.0       # walking this long without the odometry moving 5 cm => stop and turn (0 = off; 4 is a good value)
+wedge_seconds = 0.0       # walking this long while covering less than wedge_ratio of the commanded distance => stop and turn (0 = off; 2.5 is a good value)
+wedge_ratio = 0.08        # ... catches a slow grind against a leg that still creeps a few cm, which stuck_seconds misses (the simulated gait covers ~35% of the command; 0.25 fired falsely in 22 of 54 recordings)
 front_first_col = 1       # central columns used to decide whether the sensor is blind (0 = the sensor's left)
 front_last_col = 6
 min_zones = 2             # how many zones must be close for it to count (rejects single-zone noise)

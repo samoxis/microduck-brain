@@ -45,6 +45,8 @@ class Obstacle:
     sensor_lateral: float = 0.0224
     side_memory_seconds: float = 3.0
     stuck_seconds: float = 0.0
+    wedge_seconds: float = 0.0
+    wedge_ratio: float = 0.08
 
 
 @dataclass
@@ -211,6 +213,8 @@ class Config:
             raise ValueError("obstacle: steer_yaw_max >= 0, steer_slew > 0, min_turn_degrees >= 0")
         if o.stuck_seconds < 0:
             raise ValueError("obstacle: stuck_seconds >= 0")
+        if o.wedge_seconds < 0 or not 0 < o.wedge_ratio < 1:
+            raise ValueError("obstacle: wedge_seconds >= 0, 0 < wedge_ratio < 1")
         if o.corridor_half_width <= 0 or o.side_memory_seconds < 0:
             raise ValueError("obstacle: corridor_half_width > 0, side_memory_seconds >= 0")
         if o.low_obstacles not in ("avoid", "ignore"):

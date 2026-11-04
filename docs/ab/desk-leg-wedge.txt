@@ -1,0 +1,36 @@
+Desk-leg wedge: [obstacle] wedge_seconds (opt-in, off by default)
+
+The case. Run ab-head-pitch-b62de6c-turnonly/20261104-022552-off (head level, stuck_seconds = 4,
+recover off): walking at the desk, steering right at -0.45..-0.77 rad/s with front 0.33-0.6 m
+(never under stop_distance 0.28), the trunk ground against leg off_desk_l3 (3.6 cm, 5-8 cm ahead
+and 6-10 cm right of the trunk). The odometry moved 5 cm in 3.6 s while 0.24 m/s was commanded;
+each 5 cm of creep reset the stuck timer. It fell, and lay against the leg: 120 contacts.
+The 435-contact run ab-head-pitch-0a93159/20261103-233054-on is the same leg.
+
+The rule. Over the last wedge_seconds in "forward", the odometry covered less than wedge_ratio of
+the commanded distance => the same stop and turn-away as the stuck detector.
+
+Speed of the simulated gait, 2.5 s windows of "forward" (run 20261103-232025-off, 10 096 windows):
+real / commanded distance: median 0.35, 5th percentile 0.23, 1st percentile 0.11.
+So wedge_ratio 0.25 (first try) fired at 4 s into 22 of 54 runs; 0.08 is the default.
+
+Offline, all 54 archived full-simulator recordings replayed with wedge_seconds added
+(first firing only: after it the replay diverges from the recording):
+
+  wedge 2.5 s / ratio 0.25 : fired in 24 runs, 22 false (start-up, normal walking)
+  wedge 2.5 s / ratio 0.08 : fired in 2 runs, both the long desk-leg wedges, 0 false
+      20261104-022552-off  : 2.4 s after the first contact, 4.9 s before the fall
+      20261103-233054-on   : 1.8 s after the first contact (435 contacts in the run)
+  wedge 3.0 s / ratio 0.08 and 3.0 / 0.05 : the same 2 runs, 0.5-0.9 s later
+  The 3 runs with 4-22 contacts (stuck detector on) did not trigger it: brushes, not grinding.
+
+Closed loop, targeted scene (tools/desk_leg_trials.sh: the apartment moved so the duck starts
+6 s before the wedge, at true pose (3.06, 0.48), 31 deg), 45 s, stuck_seconds 4 in both arms:
+  off: 0, 0 furniture contacts      on: 10, 11 (one brush on the same leg each)
+  wedged 0 in every run, so both arms made the same decisions: the difference is the
+  simulator's run-to-run variation. 0 falls. Plus 1 pair from 11 s before: 0 and 0.
+  The long wedge itself did not recur in 6 targeted runs, so its closed-loop effect is NOT
+  measured; only that the rule catches it in the recordings and does not fire otherwise.
+
+2-D worlds (5 rooms incl. the dining room, seeds 100-105, 300 s, body 11 cm), wedge 2.5 / 0.25:
+  0 firings, 0 contacts, the same 898 m walked as without it (stuck 0 and 4).

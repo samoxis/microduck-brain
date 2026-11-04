@@ -84,6 +84,7 @@ class Stats:
     bends_aborted: int = 0        # ... cancelled: something came beside the body on that side
     bends_refused: int = 0        # a more novel direction existed, but the bend was not started (see the log)
     stuck: int = 0                # walking without moving for obstacle.stuck_seconds: stopped and turned
+    wedged: int = 0               # ... or covering under wedge_ratio of the commanded distance for wedge_seconds
     home_started: int = 0         # home.py: homing started (after home.after_seconds of walking)
     home_arrived: int = 0         # ... and reached home
     home_aborted: int = 0         # ... and given up (a fall: the odometry can't be trusted)
@@ -171,6 +172,8 @@ class Forward(State):
         self._yaw_cmd = 0.0
         self._straight = False
         self._progress = (inputs.now, inputs.pos)      # stuck detection: where and when it last moved
+        self._track: list = []                          # wedge detection: (now, pos, commanded distance so far)
+        self._commanded = 0.0
         if brain.homing.yield_pending:
             brain.homing.yield_pending = False
             brain.homing.suspended_until = inputs.now + brain.cfg.home.yield_seconds
@@ -181,9 +184,12 @@ class Forward(State):
         self._last = inputs.now
         view = brain.look(inputs)
 
-        if self._stuck(brain, inputs):
+        wedged = self._wedged(brain, inputs, dt)
+        if self._stuck(brain, inputs) or wedged:
             # Walking, but the odometry hasn't moved: pressed against something the sensor can't
             # see (a chair leg closer than its shortest range reads as nothing at all).
+            if wedged:
+                brain.stats.wedged += 1
             self._start_episode(brain, view)
             self._yield_home(brain)
             brain.stuck_turn = brain.away_from_beside(inputs)
@@ -239,6 +245,24 @@ class Forward(State):
             self._progress = (inputs.now, inputs.pos)
             return False
         return inputs.now - t0 >= limit
+
+    def _wedged(self, brain, inputs, dt) -> bool:
+        """Over the last wedge_seconds, the odometry covered less than wedge_ratio of the distance
+        commanded: grinding against something (full simulator: 5 cm in 3.6 s pressed against a desk
+        leg, steering at the limit, until it fell -- each 5 cm of creep reset the stuck timer)."""
+        win = brain.cfg.obstacle.wedge_seconds
+        if win <= 0 or inputs.pos is None:
+            return False
+        self._commanded += brain.cfg.motion.forward_speed * dt
+        tr = self._track
+        tr.append((inputs.now, inputs.pos, self._commanded))
+        while len(tr) > 1 and inputs.now - tr[1][0] >= win:
+            tr.pop(0)
+        t0, p0, c0 = tr[0]
+        if inputs.now - t0 < win:
+            return False
+        moved = math.hypot(inputs.pos[0] - p0[0], inputs.pos[1] - p0[1])
+        return moved < brain.cfg.obstacle.wedge_ratio * (self._commanded - c0)
 
     @staticmethod
     def _home_heading(brain, inputs):
