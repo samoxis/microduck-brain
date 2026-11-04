@@ -49,7 +49,6 @@ class Obstacle:
     stuck_seconds: float = 0.0
     wedge_seconds: float = 0.0
     wedge_ratio: float = 0.08
-    beside_steer: bool = False
 
 
 @dataclass
@@ -117,13 +116,7 @@ class Explore:
 
 @dataclass
 class Head:
-    """The head (the ToF sensor is on it): scanning while walking, looking down while turning,
-    looking around before walking off (brain.py). Off by default."""
-
-    @property
-    def turns(self) -> bool:
-        """The head's yaw moves: frames are read with the measured head yaw."""
-        return self.scan or self.look_around
+    """The head (the ToF sensor is on it): scanning while walking, looking down while turning (brain.py). Off by default."""
 
     scan: bool = False
     amplitude_deg: float = 25.0
@@ -133,9 +126,6 @@ class Head:
     pitch_down_deg: float = 20.0
     pitch_after_turn: float = 1.5
     pitch_while_walking: bool = True
-    look_around: bool = False
-    look_deg: float = 50.0
-    look_seconds: float = 2.0
 
 
 @dataclass
@@ -295,8 +285,6 @@ class Config:
         hd = self.head
         if not 0 <= hd.pitch_down_deg <= 40 or hd.pitch_after_turn < 0:
             raise ValueError("head: pitch_down_deg in [0, 40], pitch_after_turn >= 0")
-        if not 0 < hd.look_deg <= 60 or hd.look_seconds <= 0:
-            raise ValueError("head: look_deg in (0, 60], look_seconds > 0")
         if not 0 <= hd.amplitude_deg <= 60 or hd.period <= 0 or hd.side_free_seconds < 0:
             raise ValueError("head: amplitude_deg in [0, 60], period > 0, side_free_seconds >= 0")
         hm = self.home

@@ -30,7 +30,6 @@ sensor_lateral = 0.0224   # the sensor sits this far left of the robot's axis (m
 side_memory_seconds = 3.0 # remember wall returns near the body for this long: a chair leg leaves the field of view ~30 cm before passing the leg
 stuck_seconds = 0.0       # walking this long without the odometry moving 5 cm => stop and turn (0 = off; 4 is a good value)
 wedge_seconds = 0.0       # walking this long while covering less than wedge_ratio of the commanded distance => stop and turn (0 = off; 2.5 is a good value)
-beside_steer = false      # what is remembered beside the body (outside the corridor) counts when choosing which way to go round
 wedge_ratio = 0.08        # ... catches a slow grind against a leg that still creeps a few cm, which stuck_seconds misses (the simulated gait covers ~35% of the command over 2.5 s, steering included; 0.25 fired falsely in 22 of 54 recordings)
 front_first_col = 1       # central columns used to decide whether the sensor is blind (0 = the sensor's left)
 front_last_col = 6
@@ -111,9 +110,6 @@ pitch = false             # look down (head_pitch) while stopping, turning and a
 pitch_down_deg = 20.0     # how far down (degrees; robot.head head_pitch delta, + = down)
 pitch_after_turn = 1.5    # keep looking down this long after a stop or a turn in place (s)
 pitch_while_walking = true # false = look down only while stopping or turning in place, level as soon as it walks
-look_around = false       # before walking off with nothing remembered (start, after a fall): turn the head left and right
-look_deg = 50.0           # ... this far each way (degrees)
-look_seconds = 2.0        # ... over this long (s)
 
 [home]
 # Go back to where it started, through cells it has already walked (home.py). Uses the same map as
