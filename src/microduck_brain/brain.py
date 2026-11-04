@@ -139,6 +139,7 @@ class Hold(State):
         self._fell = True
         brain.hazards.forget()
         brain.explorer.forget()
+        brain.need_look = brain.cfg.head.look_around
         if brain.homing.active or brain.homing.home is not None:
             if brain.homing.active:
                 brain.stats.home_aborted += 1
@@ -165,6 +166,8 @@ class Hold(State):
                 # Home already reached (and no fall since): back to standing there, not exploring.
                 if brain.paused:
                     return cmd, "paused"
+                if brain.need_look and inputs.pose is not None and not brain.homing.arrived:
+                    return cmd, "look"
                 return cmd, ("home" if brain.homing.arrived else "forward")
         else:
             self._ok_since = None
@@ -506,6 +509,27 @@ class Face(_Rotation):
         return move(0.0, (1.0 if err > 0 else -1.0) * brain.cfg.motion.turn_speed), None
 
 
+class Look(State):
+    """Before walking off with nothing remembered (the start, or after a fall): stand and turn the head
+    left and right (``[head] look_around``), so what is beside the body -- outside the 45° view -- is
+    in the side memory before it picks a way round anything."""
+
+    name = "look"
+
+    def enter(self, brain, inputs):
+        self.since = inputs.now
+        self._sent = False
+        brain.need_look = False
+
+    def step(self, brain, inputs):
+        if not self._sent:
+            self._sent = True
+            return STOP, None
+        if inputs.now - self.since >= brain.cfg.head.look_seconds:
+            return NONE, "forward"
+        return NONE, None
+
+
 class Paused(State):
     """Stopped by a command or a gesture: stand still (one robot.stop) until "go"."""
 
@@ -584,7 +608,8 @@ class Brain:
         self.states: dict[str, State] = {}
         self.paused = cfg.commands.enabled and cfg.commands.start_paused
         self.gesture = HandGesture(cfg) if cfg.gestures.enabled else None
-        for s in (Hold(), Forward(), Brake(), Turn(), BigTurn(), Face(), AtHome(), Paused()):
+        self.need_look = cfg.head.look_around
+        for s in (Hold(), Forward(), Brake(), Turn(), BigTurn(), Face(), AtHome(), Paused(), Look()):
             self.register(s)
         self.state: State = self.states["hold"]
         self._last_now: float | None = None
@@ -636,7 +661,7 @@ class Brain:
         elif inputs.safe and inputs.yaw is not None:
             sx = inputs.pose.sensor_pos[0] if inputs.pose else self.cfg.low.nominal_sensor_forward
             raw = inputs.yaw * self.cfg.heading.yaw_sign
-            lz.update(inputs.frame, inputs.pos, raw, sx, inputs.now, head_yaw(inputs.pose) if self.cfg.head.scan else 0.0)
+            lz.update(inputs.frame, inputs.pos, raw, sx, inputs.now, head_yaw(inputs.pose) if self.cfg.head.turns else 0.0)
         pos, yaw = lz.correct(inputs.pos, None if inputs.yaw is None else inputs.yaw * self.cfg.heading.yaw_sign)
         if yaw is not None:
             yaw = (yaw + math.pi) % (2 * math.pi) - math.pi
@@ -703,8 +728,11 @@ class Brain:
         """Scan only while walking forward with a pose (without frames.tof the brain can't know where
         the head looks); anywhere else, centre the head."""
         h = self.cfg.head
+        if self.state.name == "look" and inputs.pose is not None:
+            st = self.state
+            return math.radians(h.look_deg) * math.sin(2 * math.pi * (inputs.now - st.since) / h.look_seconds)
         if not h.scan:
-            return None if not h.pitch else 0.0
+            return None if not (h.pitch or h.look_around) else 0.0
         if self.state.name != "forward" or inputs.pose is None:
             self._scan_t = 0.0
             return 0.0
@@ -718,7 +746,7 @@ class Brain:
         h = self.cfg.head
         if not h.pitch:
             return None
-        if inputs.pose is None or self.state.name in ("hold", "home", "paused"):
+        if inputs.pose is None or self.state.name in ("hold", "home", "paused", "look"):
             return 0.0
         down = math.radians(h.pitch_down_deg)
         if self.state.name in ("brake", "turn", "bigturn", "face"):
@@ -824,7 +852,7 @@ class Brain:
         if self.cfg.localize.enabled:
             inputs = self._localized(inputs)
         self._track_yaw(inputs.yaw)
-        self.head_now = head_yaw(inputs.pose) if self.cfg.head.scan else 0.0
+        self.head_now = head_yaw(inputs.pose) if self.cfg.head.turns else 0.0
         self.hazards.update(inputs.frame, inputs.pose, inputs.pos, self.yaw, inputs.safe, inputs.now,
                             fell=inputs.safe_reason in (FALLEN, LIMP))
         self._pos = inputs.pos

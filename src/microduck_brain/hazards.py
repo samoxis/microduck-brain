@@ -92,7 +92,7 @@ class HazardMap:
         """(forward from the sensor, left of the axis) for every zone of this kind in the frame."""
         sl = self.cfg.obstacle.sensor_lateral
         geom = geometry(pose, self.cfg)                          # the head may pitch: full pose
-        yaw = head_yaw(pose) if self.cfg.head.scan and geom is None else 0.0   # where the head looks
+        yaw = head_yaw(pose) if self.cfg.head.turns and geom is None else 0.0   # where the head looks
 
         def trunk(f: float, l: float) -> tuple[float, float]:
             f, l = rotate(f, l, yaw)
@@ -244,8 +244,18 @@ class HazardMap:
             return view
         front, blocked = view.front, view.blocked
         left_free, right_free = view.left_free, view.right_free
+        beside = self.cfg.obstacle.beside_steer
         for h in self.items:
             if abs(h.lateral) > self._half_width(h.kind) or h.forward < -0.1:
+                if beside and h.kind == SIDE and -0.15 <= h.forward <= 0.6 and abs(h.lateral) < 0.35:
+                    # Beside the body, outside the corridor: not in the way ahead, but no way to go
+                    # round either (2-D dining room: the contacts were all a turn or a steer towards
+                    # a leg beside the body). Only the side's free space, so the choice of side.
+                    f = max(0.0, h.forward)
+                    if h.lateral >= 0:
+                        left_free = min(left_free, f)
+                    else:
+                        right_free = min(right_free, f)
                 continue
             # Treated as closer than it is: react firmly, because the hazard is visible only briefly.
             f = h.forward - self._clearance(h.kind)
