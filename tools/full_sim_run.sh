@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One full-simulator run of microduck-brain, recorded, for the README's "verified" column.
+# One full-simulator run of microduck-brain, recorded, replayed and plotted (the README's Results).
 #
 # What it does:
 #   1. starts Pollen's simulator headless in the apartment scene (scripts/duck-sim), unless one is

@@ -1,10 +1,13 @@
 """Write a copy of the apartment scene with the flat moved so the duck, which body_server.py always
 places at the origin facing +x, starts at a chosen pose in it (x, y in m, heading in deg).
 
-    /root/microduck_rl/.venv/bin/python tools/scenes/make_shifted_apartment.py 2.70 0.27 26 OUT.xml
+    ~/microduck_rl/.venv/bin/python tools/scenes/make_shifted_apartment.py X Y HEADING_DEG \
+        ~/microduck_rl/src/mjlab_microduck/robot/microduck/scene_apartment_desk_leg.xml
 
-Used for scene_apartment_desk_leg.xml: 11 s (true pose) before the desk-leg wedge of run
-ab-head-pitch-b62de6c-turnonly/20261104-022552-off, walking towards leg off_desk_l3 at (3.40, 0.36).
+OUT.xml must sit next to scene_apartment.xml (it is read from OUT's directory). Used by
+tools/desk_leg_trials.sh: by default 3.06 0.48 31, 6 s (true pose) before the desk-leg wedge of run
+ab-head-pitch-b62de6c-turnonly/20261104-022552-off (2.70 0.27 26: 11 s before), walking towards
+leg off_desk_l3 at (3.40, 0.36).
 """
 
 import math

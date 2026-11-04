@@ -59,14 +59,13 @@ def drifted_ticks(run: str, yaw_rate: float, scale: float):
 
     prev = None
     ox = oy = oa = None
-    t0 = None
     for t in read(run):
         inp = t.inputs
         if inp.pos is None or inp.yaw is None:
             yield replace(t, inputs=replace(inp, pos=None, yaw=None))
             continue
         if prev is None:
-            ox, oy, oa, t0 = inp.pos[0], inp.pos[1], inp.yaw, inp.now
+            ox, oy, oa = inp.pos[0], inp.pos[1], inp.yaw
         else:
             dx, dy = inp.pos[0] - prev[0], inp.pos[1] - prev[1]
             da = (inp.yaw - prev[2] + math.pi) % (2 * math.pi) - math.pi

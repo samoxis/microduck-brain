@@ -16,7 +16,7 @@ the scene (floors excluded); entering the stairwell is checked against the hole'
 Run with microduck_rl's venv:
 
     cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/kinematic_apartment.py \
-        --seconds 300 --out ~/microduck-brain/docs/apartment.jsonl.gz --svg ~/microduck-brain/docs/apartment.svg
+        --seconds 300 --out ~/microduck-brain/docs/apartment-run.jsonl.gz --svg ~/microduck-brain/docs/apartment-run.svg
 """
 
 from __future__ import annotations

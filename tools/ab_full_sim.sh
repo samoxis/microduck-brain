@@ -11,7 +11,8 @@
 #
 # Each run starts its own simulator (full_sim_run.sh stops it at the end), so every run starts from
 # the same pose; that's why a simulator already running is refused. The configs are brain.toml with
-# AB_KEY (default explore.enabled) = false / true, nothing else changed. Output:
+# AB_KEY (default explore.enabled) = false / true, nothing else changed (with AB_SET: off = brain.toml
+# as it is, on = every key listed set). Output:
 # runs/<timestamp>-off|on/ and runs/ab-<timestamp>.json.
 set -euo pipefail
 

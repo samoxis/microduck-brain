@@ -222,7 +222,7 @@ class Runner:
                 cmd = self.brain.tick(inp)
                 self._send(cmd)
                 name = self.brain.state_name
-                for t_ev, ev, angle, why in self.brain.explore_log:
+                for _t, ev, angle, why in self.brain.explore_log:
                     what = ("left" if angle > 0 else "right") if ev == "side" else f"{math.degrees(angle):+.0f}°"
                     log.info("explore: %s %s%s", ev, what, f" ({why})" if why else "")
                 self.brain.explore_log.clear()

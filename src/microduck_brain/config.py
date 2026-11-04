@@ -102,7 +102,7 @@ class Heading:
 
 @dataclass
 class Explore:
-    """Prefer directions not visited yet (see explore.py). Off by default until measured in the full simulator."""
+    """Prefer directions not visited yet (see explore.py). Off by default: noise in the full simulator."""
 
     enabled: bool = False
     cell: float = 0.25
@@ -116,7 +116,7 @@ class Explore:
 
 @dataclass
 class Head:
-    """Scan with the head (the ToF sensor is on it) while walking: see head.py. Off by default."""
+    """The head (the ToF sensor is on it): scanning while walking, looking down while turning (brain.py). Off by default."""
 
     scan: bool = False
     amplitude_deg: float = 25.0

@@ -30,7 +30,7 @@ sensor_lateral = 0.0224   # the sensor sits this far left of the robot's axis (m
 side_memory_seconds = 3.0 # remember wall returns near the body for this long: a chair leg leaves the field of view ~30 cm before passing the leg
 stuck_seconds = 0.0       # walking this long without the odometry moving 5 cm => stop and turn (0 = off; 4 is a good value)
 wedge_seconds = 0.0       # walking this long while covering less than wedge_ratio of the commanded distance => stop and turn (0 = off; 2.5 is a good value)
-wedge_ratio = 0.08        # ... catches a slow grind against a leg that still creeps a few cm, which stuck_seconds misses (the simulated gait covers ~35% of the command; 0.25 fired falsely in 22 of 54 recordings)
+wedge_ratio = 0.08        # ... catches a slow grind against a leg that still creeps a few cm, which stuck_seconds misses (the simulated gait covers ~35% of the command over 2.5 s, steering included; 0.25 fired falsely in 22 of 54 recordings)
 front_first_col = 1       # central columns used to decide whether the sensor is blind (0 = the sensor's left)
 front_last_col = 6
 min_zones = 2             # how many zones must be close for it to count (rejects single-zone noise)
@@ -86,7 +86,7 @@ yaw_sign = 1.0            # 1 = odom.yaw grows to the left (like vyaw, as the pr
 
 [explore]
 # Prefer directions not visited yet, remembered as grid cells in the odometry frame (explore.py).
-# Off by default: measured only in flat 2-D worlds so far (tests/world2d.py), not in the full simulator.
+# Off by default: +71% area in flat 2-D worlds (tests/world2d.py), noise in the full simulator (5 + 5 runs).
 enabled = false
 cell = 0.25               # grid cell size (m)
 turn_margin = 1.5         # turning in place: pick the less visited side if both sides' free space differs by less than this (m)

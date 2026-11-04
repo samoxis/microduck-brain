@@ -5,6 +5,7 @@
 # simulator; prints the toy contacts and low objects seen per run.
 #
 #   OFF=level.toml ON=pitched.toml RUNS=5 bash tools/cube_trials.sh
+# Side effect: writes its scene XML into $DUCK_SIM_RL (default ~/microduck_rl), next to Pollen's scenes.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RL="${DUCK_SIM_RL:-$HOME/microduck_rl}"

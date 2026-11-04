@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from microduck_brain.brain import Brain, Inputs
+from microduck_brain.brain import Brain
 from microduck_brain.config import Config, from_dict
 from microduck_brain.depth import View
 from microduck_brain.explore import Explorer

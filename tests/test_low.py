@@ -23,7 +23,7 @@ from microduck_brain.depth import DepthFrame, Pose, floor_model, low_obstacles
 from microduck_brain.hazards import LOW
 from microduck_brain.recover import FALLEN
 
-from .lowgeo import SENSOR_X, pose_for, render
+from .lowgeo import pose_for, render
 from .test_brain import clear
 
 FIXTURES = json.loads((Path(__file__).parent / "fixtures" / "mujoco_low.json").read_text())

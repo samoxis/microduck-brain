@@ -264,7 +264,7 @@ def test_fall_stops_and_sends_no_walk_commands_until_upright():
     s = Sim()
     s.up()
     s.log.clear()
-    cmd = s.run(0.1, safe=False)
+    s.run(0.1, safe=False)
     assert s.brain.state_name == "hold"
     s.run(5.0)
     kinds = [c.kind for _, _, c in s.log]

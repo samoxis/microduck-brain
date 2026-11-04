@@ -3,6 +3,9 @@
     uv run microduck-brain --observe --duration 60 --record first.jsonl.gz   # on a stand / by hand
     uv run python tools/first_robot_check.py first.jsonl.gz [--config brain.toml] [--json out.json]
 
+Without --config it reads ./brain.toml if there is one, like microduck-brain itself (else the
+built-in defaults), so the replay check uses the configuration the recording was made with.
+
 Each check prints PASS / WARN / FAIL with the number behind it; the exit code is 1 if any FAILs.
 The thresholds are what the brain itself assumes (see brain.toml and the README's findings), so a
 FAIL means the brain's arithmetic would be wrong on this robot, not just that the run was odd:
@@ -112,10 +115,11 @@ def check(path: str, config: str | None) -> list[tuple[str, str, str]]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("run")
-    ap.add_argument("--config", "-c")
+    ap.add_argument("--config", "-c", help="TOML file (default: ./brain.toml if present, as microduck-brain)")
     ap.add_argument("--json")
     a = ap.parse_args()
-    res = check(a.run, a.config)
+    config = a.config if a.config else ("brain.toml" if Path("brain.toml").exists() else None)
+    res = check(a.run, config)
     for name, verdict, text in res:
         print(f"{verdict:5} {name:24} {text}")
     if a.json:

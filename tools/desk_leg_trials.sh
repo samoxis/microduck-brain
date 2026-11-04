@@ -5,6 +5,7 @@
 # the stuck / wedge stops per run.
 #
 #   OFF=a.toml ON=b.toml RUNS=5 bash tools/desk_leg_trials.sh
+# Side effect: writes its scene XML into $DUCK_SIM_RL (default ~/microduck_rl), next to Pollen's scenes.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RL="${DUCK_SIM_RL:-$HOME/microduck_rl}"

@@ -1,7 +1,8 @@
-"""Mean, spread and range of full-simulator runs, grouped by exploration OFF / ON.
+"""Mean, spread and range of full-simulator runs, grouped OFF / ON by a boolean config key (--key,
+default explore.enabled).
 
-Reads, from each run directory: summary.json (replay + coverage), explore_report.json (if present)
-and brain.toml (which says whether exploration was on). A difference counts as a signal only when
+Reads, from each run directory: summary.json (replay + coverage), explore_report.json (if present),
+contacts.txt and odom_truth.json (MEASURE=1), and brain.toml (which says whether the key was on). A difference counts as a signal only when
 the two groups' ranges don't overlap; with 3 runs a side that is all this says, and it says it
 honestly.
 
@@ -82,7 +83,7 @@ def summarise(dirs: list[Path], key: str = "explore.enabled") -> dict:
         label, s, r = load(d, key)
         groups[label].append((d, s, r))
     out = {"key": key, "runs": {k: [str(d) for d, _, _ in v] for k, v in groups.items()}, "metrics": {}}
-    for name, get, better in METRICS:
+    for name, get, _better in METRICS:
         row = {}
         for label, runs in groups.items():
             vals = [v for _, s, r in runs if (v := get(s, r)) is not None]
