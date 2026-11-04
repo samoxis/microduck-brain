@@ -1,7 +1,10 @@
 # Test hook for the MuJoCo body: when the file $DUCK_PUSH_FILE appears, give the trunk a sideways
 # shove (adds to its linear velocity once), then delete the file. With $DUCK_TRUTH_FILE, log where
 # the trunk really is (ground truth, to measure odometry drift). With $DUCK_CONTACT_FILE, log every new
-# contact of the robot with anything but the floor (furniture, walls, toys, the stairs). Patches mujoco.mj_step lazily,
+# contact of the robot with anything but the floor (furniture, walls, toys, the stairs). With
+# $DUCK_HAND_FILE, when that file appears ("DIST SECONDS"), hold the scene's mocap body "hand" (a
+# 9 x 9 cm palm, see tools/scenes/make_hand_apartment.py) DIST m in front of the depth sensor, facing
+# it, for SECONDS, then take it away and delete the file. Patches mujoco.mj_step lazily,
 # when mujoco is first imported, so nothing is imported at interpreter start-up.
 import os
 import sys
@@ -11,6 +14,8 @@ import importlib.machinery
 PUSH = os.environ.get("DUCK_PUSH_FILE")
 TRUTH = os.environ.get("DUCK_TRUTH_FILE")    # also: "monotonic_s x y yaw sim_time" of the trunk every 0.25 s
 CONTACTS = os.environ.get("DUCK_CONTACT_FILE")  # also: append "sim_time kind other robot_geom" per new contact
+HAND = os.environ.get("DUCK_HAND_FILE")
+AWAY = (40.0, 40.0, 5.0)                      # where the hand waits, far outside the flat
 
 
 def _patch(mujoco):
@@ -67,8 +72,43 @@ def _patch(mujoco):
         touching.clear()
         touching.update(now)
 
+    def hand(model, data):
+        if "hand" not in state:
+            b = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "hand")
+            state["hand"] = int(model.body_mocapid[b]) if b >= 0 else -1
+            state["tof"] = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "tof")
+            state["until"] = None
+        m = state["hand"]
+        if m < 0 or state["tof"] < 0:
+            return
+        if state["until"] is None and state["n"] % 20 == 0 and os.path.exists(HAND):
+            try:
+                dist, secs = (float(v) for v in open(HAND).read().split()[:2])
+            except ValueError:
+                dist, secs = 0.10, 1.5
+            state["dist"], state["until"] = dist, data.time + secs
+            print(f"== hand: {dist:.2f} m in front for {secs:.1f} s at t={data.time:.2f}", flush=True)
+        if state["until"] is not None:
+            if data.time < state["until"]:
+                site, rot = data.site_xpos[state["tof"]], data.site_xmat[state["tof"]].reshape(3, 3)
+                data.mocap_pos[m] = site + rot[:, 0] * state["dist"]     # along the sensor's +x
+                import numpy as np
+
+                q = np.zeros(4)
+                mujoco.mju_mat2Quat(q, data.site_xmat[state["tof"]])
+                data.mocap_quat[m] = q
+            else:
+                data.mocap_pos[m] = AWAY
+                state["until"] = None
+                try:
+                    os.remove(HAND)
+                except OSError:
+                    pass
+
     def mj_step(model, data, *a, **k):
         state["n"] += 1
+        if HAND:
+            hand(model, data)
         if cout is not None and state["n"] % 4 == 0:
             log_contacts(model, data)
         if out is not None and data.time >= state["next"]:
@@ -114,5 +154,5 @@ class _Finder(importlib.abc.MetaPathFinder):
         return spec
 
 
-if PUSH or TRUTH or CONTACTS:
+if PUSH or TRUTH or CONTACTS or HAND:
     sys.meta_path.insert(0, _Finder())

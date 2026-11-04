@@ -15,8 +15,15 @@ Hand gesture, false positives, on every full-simulator recording made so far (67
   (offline, open loop: the recorded states; closed loop the brain also waits in "brake" while a
   hand is in front instead of turning away.)
 
-The gesture itself: synthetic frames only (tests/test_commands.py): hand held 1.0 s then taken
-away stops a walking robot (it brakes for the hand, waits, pauses on the release); the same again
-starts it. 0.3 s and 5 s holds do not count. NOT verified: a real hand in front of a real sensor
-(close range, < 5 cm, may read as invalid zones on the VL53L5CX), nor in the full simulator (no hand
-in the scene).
+The gesture in the full simulator (tools/gesture_trials.sh, 4 runs of 90 s, MEASURE=1): a 9 x 9 cm
+"palm" (a mocap body the simulated sensor sees, tools/scenes/make_hand_apartment.py) held 10 cm in
+front of the sensor by tools/push/sitecustomize.py while the brain walks:
+  hand 1.5 s while walking   -> paused, 4 of 4 runs
+  hand 1.5 s while paused    -> walking again, 4 of 4 runs (once it turned 1 s later: an ordinary
+                                avoidance after it walked on)
+  hand 6.0 s                 -> nothing toggled, 4 of 4 runs (gestures counted: 2 per run, 8 of 8)
+  while paused (25 s each):  trunk moved 0.003-0.009 m (true pose); 0 contacts in all 4 runs.
+  (tools/gesture_report.py per run; runs archived in /root/runs-archive/gesture/.)
+NOT verified: a real hand in front of a real sensor. The simulated sensor reports any surface as a
+valid return; the VL53L5CX's own close-range behaviour (10 cm is within its specified range) and a
+real hand's reflectivity are untested.
