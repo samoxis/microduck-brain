@@ -234,3 +234,22 @@ def test_pitched_head_facing_a_wall_does_not_call_it_a_low_object():
         f = w.render(4 - dist - world2d.SENSOR_FORWARD, 2.0, 0.0, 0.0, 0.35)
         pose = world2d._pose(0.0, 0.35)
         assert low_obstacles(f, pose, cfg, geometry(pose, cfg)) == []
+
+
+def test_pitch_only_while_turning_when_not_while_walking():
+    from .test_brain import wall_ahead
+
+    cfg = from_dict({"head": {"pitch": True, "pitch_while_walking": False}, "safety": {"resume_delay": 0.2}})
+    b = Brain(cfg)
+    pose = world2d._pose(0.0)
+    t, yaw, log = 0.0, 0.0, []
+    for frame_, secs in ((clear(), 3.0), (wall_ahead(), 2.0), (clear(), 3.0)):
+        end = t + secs
+        while t < end:
+            cmd = b.tick(Inputs(t, frame_, True, "", yaw, pose, (0.0, 0.0)))
+            if cmd.kind == "move":
+                yaw += 0.5 * cmd.vyaw * 0.05
+            log.append((b.state_name, cmd.head_pitch))
+            t += 0.05
+    assert any(p and p > 0 for s, p in log if s in ("brake", "turn"))
+    assert all(p == 0.0 for s, p in log if s == "forward")

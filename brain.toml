@@ -107,6 +107,7 @@ pitch = false             # look down (head_pitch) while stopping, turning and a
                           # 7 cm objects under the level beams within ~45 cm come into view (finding 3)
 pitch_down_deg = 20.0     # how far down (degrees; robot.head head_pitch delta, + = down)
 pitch_after_turn = 1.5    # keep looking down this long after a stop or a turn in place (s)
+pitch_while_walking = true # false = look down only while stopping or turning in place, level as soon as it walks
 
 [home]
 # Go back to where it started, through cells it has already walked (home.py). Uses the same map as

@@ -121,6 +121,7 @@ class Head:
     pitch: bool = False
     pitch_down_deg: float = 20.0
     pitch_after_turn: float = 1.5
+    pitch_while_walking: bool = True
 
 
 @dataclass
