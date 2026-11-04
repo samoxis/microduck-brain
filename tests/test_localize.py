@@ -28,9 +28,9 @@ def mapped_room():
 @pytest.mark.parametrize("off,improves", [((0.05, 0.03, -0.02), True), ((0.0, 0.0, 0.02), True),
                                          ((0.03, -0.02, 0.0), False)])
 def test_a_wrong_pose_is_pulled_towards_the_walls_seen_before(off, improves):
-    """Large errors shrink. A small one (3.6 cm) can grow a little (to 4.9 cm here): the 5 cm grid
-    and +-4 cm steps can't resolve it, which is also why the correction wanders with perfect
-    odometry. Documented, not hidden: it stays under 6 cm."""
+    """Large errors shrink. A small one (3.6 cm) is left alone: the +-4 cm steps can't resolve it,
+    and the thresholds (2 cm and 50% better) are set so that it isn't "corrected" into a worse one,
+    which is what made good odometry worse before."""
     w, loc = mapped_room()
     x, y, yaw = 2.0, 1.5, 0.6
     ox, oy, oa = x + off[0], y + off[1], yaw + off[2]
@@ -40,11 +40,10 @@ def test_a_wrong_pose_is_pulled_towards_the_walls_seen_before(off, improves):
         loc._last_frame = None
     (cx, cy), ca = loc.correct((ox, oy), oa)
     after = math.hypot(cx - x, cy - y) + abs(ca - yaw) * 1.0
-    assert loc.corrections > 0
     if improves:
-        assert after < before
+        assert loc.corrections > 0 and after < before
     else:
-        assert math.hypot(cx - x, cy - y) < 0.06
+        assert math.hypot(cx - x, cy - y) <= math.hypot(off[0], off[1]) + 1e-9
 
 
 def test_new_walls_do_not_count_until_min_age():
