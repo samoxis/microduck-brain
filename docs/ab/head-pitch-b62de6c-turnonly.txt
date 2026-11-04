@@ -1,0 +1,27 @@
+commit b62de6c+dirty — head.pitch OFF: 3 runs, ON: 3 runs
+
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          4.58 ± 0.63 [4.19–5.31]      9.56 ± 1.07 [8.69–10.75]        +4.98  separated
+cells                            73.33 ± 10.12 [67–85]        153.00 ± 17.06 [139–172]       +79.67  separated
+distance_m                       81.85 ± 4.89 [76.21–84.93]   85.29 ± 0.87 [84.35–86.07]      +3.44  noise (ranges overlap)
+bbox_m2                          9.16 ± 5.03 [6.22–14.96]     27.74 ± 6.71 [23.59–35.48]     +18.58  separated
+avoidances                       410.00 ± 69.48 [333–468]     460.33 ± 86.80 [378–551]       +50.33  noise (ranges overlap)
+avoidances_with_stop             50.00 ± 8.19 [43–59]         33.00 ± 5.57 [28–39]           -17.00  separated
+big_turns                        13.00 ± 1.73 [12–15]         4.67 ± 3.51 [1–8]               -8.33  separated
+turn_s                           29.00 ± 2.43 [26.3–31]       20.93 ± 3.26 [19–24.7]          -8.07  separated
+falls_or_unhealthy               0.67 ± 0.58 [0–1]            0.67 ± 1.15 [0–2]               +0.00  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   27.49 ± 5.12 [23.36–33.22]   35.14 ± 4.38 [32.44–40.2]       +7.65  noise (ranges overlap)
+avoids/min elsewhere             46.86 ± 7.55 [38.19–52.01]   50.12 ± 10.35 [40.22–60.86]     +3.26  noise (ranges overlap)
+contacts: furniture              40.00 ± 69.28 [0–120]        0.00 ± 0.00 [0–0]              -40.00  noise (ranges overlap)
+contacts: toys                   0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+contacts: stairs                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+odometry error, final (m)        0.10 ± 0.07 [0.02–0.16]      0.03 ± 0.01 [0.02–0.03]         -0.07  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+side_choices                     0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+saved: runs/ab-20261104-024716.json
+real-time checks at >= 1.00x: 6
+both arms: [obstacle] stuck_seconds = 4.0; on arm: [head] pitch = true, pitch_while_walking = false (frozen copy's brain.toml edited, hence +dirty)
+run folders: /root/runs-archive/ab-head-pitch-b62de6c-turnonly (cloud container)
+falls_or_unhealthy: the on arm's 2 are holds for robotd's loop below 45 Hz (the container), not falls; the off arm's 1 is a real fall. The off arm's 120 furniture contacts are one run against desk leg off_desk_l3, the same leg as in the earlier pitched runs: a hazard of the scene, not of the pitch.

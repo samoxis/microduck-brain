@@ -1,0 +1,21 @@
+commit 3b323ee — head.scan OFF: 5 runs, ON: 5 runs
+
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          8.02 ± 1.44 [6.56–10.25]     5.29 ± 1.39 [3.94–6.88]         -2.73  noise (ranges overlap)
+cells                            128.40 ± 22.98 [105–164]     84.60 ± 22.28 [63–110]         -43.80  noise (ranges overlap)
+distance_m                       85.33 ± 0.61 [84.38–85.94]   84.66 ± 0.72 [83.41–85.13]      -0.67  noise (ranges overlap)
+bbox_m2                          24.07 ± 7.50 [19.72–37.36]   13.21 ± 7.29 [5.48–20.69]      -10.86  noise (ranges overlap)
+avoidances                       361.20 ± 42.43 [301–401]     406.20 ± 66.29 [332–484]       +45.00  noise (ranges overlap)
+avoidances_with_stop             33.60 ± 13.97 [18–55]        47.40 ± 15.34 [35–74]          +13.80  noise (ranges overlap)
+big_turns                        6.40 ± 3.85 [2–12]           10.60 ± 4.56 [6–18]             +4.20  noise (ranges overlap)
+turn_s                           22.78 ± 9.68 [12.7–38.9]     28.24 ± 12.56 [21.5–50.6]       +5.46  noise (ranges overlap)
+falls_or_unhealthy               0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   28.65 ± 10.94 [17.14–41.49]  28.61 ± 5.53 [20.52–34.64]      -0.04  noise (ranges overlap)
+avoids/min elsewhere             38.40 ± 5.56 [30.25–44.17]   46.62 ± 7.72 [38.01–55.03]      +8.22  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+side_choices                     0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+saved: runs/ab-20261103-230120.json
+real-time checks at >= 1.00x: 10
+run folders: /root/runs-archive/ab-head-scan-3b323ee (cloud container)

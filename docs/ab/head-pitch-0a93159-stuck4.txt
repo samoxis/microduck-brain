@@ -1,0 +1,27 @@
+commit 0a93159+dirty — head.pitch OFF: 3 runs, ON: 3 runs
+
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          5.46 ± 1.42 [3.88–6.62]      4.67 ± 0.94 [4.06–5.75]         -0.79  noise (ranges overlap)
+cells                            87.33 ± 22.74 [62–106]       74.67 ± 15.04 [65–92]          -12.66  noise (ranges overlap)
+distance_m                       85.46 ± 0.53 [85.08–86.06]   84.81 ± 0.47 [84.27–85.11]      -0.65  noise (ranges overlap)
+bbox_m2                          15.20 ± 8.61 [5.25–20.41]    8.68 ± 5.81 [5.14–15.38]        -6.52  noise (ranges overlap)
+avoidances                       461.33 ± 20.43 [438–476]     370.00 ± 27.06 [344–398]       -91.33  separated
+avoidances_with_stop             32.00 ± 13.00 [17–40]        59.33 ± 10.02 [49–69]          +27.33  separated
+big_turns                        6.67 ± 3.21 [3–9]            13.67 ± 4.16 [9–17]             +7.00  noise (ranges overlap)
+turn_s                           21.87 ± 7.98 [13.2–28.9]     38.63 ± 4.09 [34.9–43]         +16.76  separated
+falls_or_unhealthy               0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   25.69 ± 3.78 [21.84–29.4]    32.85 ± 8.91 [25.01–42.54]      +7.16  noise (ranges overlap)
+avoids/min elsewhere             51.37 ± 1.07 [50.68–52.6]    40.35 ± 5.00 [36.77–46.06]     -11.02  separated
+contacts: furniture              0.00 ± 0.00 [0–0]            14.33 ± 9.29 [4–22]            +14.33  separated
+contacts: toys                   0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+contacts: stairs                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+odometry error, final (m)        0.05 ± 0.01 [0.05–0.06]      0.16 ± 0.11 [0.04–0.25]         +0.11  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+side_choices                     0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+saved: runs/ab-20261104-012754.json
+real-time checks at >= 1.00x: 6
+both arms: [obstacle] stuck_seconds = 4.0 (frozen copy's brain.toml edited, hence +dirty)
+run folders: /root/runs-archive/ab-head-pitch-0a93159-stuck4 (cloud container)
+All furniture contacts with pitch on are one desk leg (off_desk_l3), touched by the feet and legs: beside the body, out of view. Pitched 22-30 deg, the frames before the contact see only floor, 0.3-1.4 m ahead; nothing tall is in view, so the side memory has nothing to keep.

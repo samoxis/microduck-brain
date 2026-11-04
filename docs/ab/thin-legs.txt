@@ -1,0 +1,27 @@
+Thin furniture legs beside the body: traced, three fixes tried, none kept (2026-11-04)
+
+Where it happens. Full simulator: brushes with one desk leg (off_desk_l3, 3.6 cm). 2-D dining room
+(tests/world2d.py, 28 legs of 3 cm, body radius 0.11 m, 600 s runs): 5 contacts in 30 runs
+(seeds 200-229), 4 in 30 (holdout seeds 300-329), i.e. ~1 per 3 hours of walking.
+
+Cause, every contact traced (seeds 200-229, true pose = odometry in 2-D):
+  all 5: a turn or a steer towards a leg beside the body (42-82 deg off the axis, outside the
+         45 deg view), 15-31 s into the run.
+  2 of 5 (219, 225): the leg was seen at 0.41-0.44 m 4.5 s before; the 3 s side memory had
+         expired 1.6-1.7 s before the contact.
+  3 of 5 (218, 221, 229): the leg was seen only from 0.49-0.9 m, then approached on a curve with
+         it outside the view; never in the side memory.
+Full-simulator desk-leg scene (tools/desk_leg_trials.sh): there the duck started with the leg
+already 64 deg to its right, never in view at all.
+
+Tried (each opt-in; same seeds; then holdout seeds):
+  side memory 6 s        200-229: 3 contacts (vs 5)   300-329: 4 (vs 4)
+  side memory 9 s        200-229: 3                   300-329: 4
+  beside-aware steering  200-229: 6, and 7% less walked     (side memory beside the body lowers
+                                                       that side's free space when choosing a way round)
+  look around at start   200-229: 5                   (head +-50 deg over 2 s before walking off;
+                                                       the contacts come 15-31 s later, long after)
+  both of the last two   200-229: 6
+Verdict: noise on the holdout seeds for all of them. None kept: the last two were removed again
+(git revert of 580cd99), side_memory_seconds stays 3.0. The head scan, measured before, is the one
+that addresses this case in 2-D (2 -> 0 leg contacts over 30 runs, docs: README results).

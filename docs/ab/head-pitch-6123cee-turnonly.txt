@@ -1,0 +1,27 @@
+commit 6123cee+dirty — head.pitch OFF: 3 runs, ON: 3 runs
+
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          6.83 ± 0.25 [6.69–7.12]      8.96 ± 1.99 [7.19–11.12]        +2.13  separated
+cells                            109.33 ± 4.04 [107–114]      143.33 ± 31.97 [115–178]       +34.00  separated
+distance_m                       84.78 ± 0.60 [84.15–85.35]   84.44 ± 0.79 [83.98–85.35]      -0.34  noise (ranges overlap)
+bbox_m2                          20.68 ± 0.70 [20.14–21.47]   25.96 ± 10.94 [19.04–38.57]     +5.28  noise (ranges overlap)
+avoidances                       374.67 ± 13.58 [359–383]     426.00 ± 49.37 [397–483]       +51.33  separated
+avoidances_with_stop             35.67 ± 9.61 [27–46]         44.00 ± 10.39 [38–56]           +8.33  noise (ranges overlap)
+big_turns                        6.67 ± 1.15 [6–8]            10.00 ± 3.46 [8–14]             +3.33  noise (ranges overlap)
+turn_s                           22.17 ± 6.40 [15.9–28.7]     28.10 ± 7.84 [22.2–37]          +5.93  noise (ranges overlap)
+falls_or_unhealthy               1.33 ± 1.15 [0–2]            1.33 ± 1.53 [0–3]               +0.00  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   27.54 ± 1.77 [25.67–29.2]    33.68 ± 5.25 [28.52–39.02]      +6.14  noise (ranges overlap)
+avoids/min elsewhere             41.34 ± 2.68 [39.2–44.34]    46.23 ± 6.23 [41.68–53.33]      +4.89  noise (ranges overlap)
+contacts: furniture              0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+contacts: toys                   0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+contacts: stairs                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+odometry error, final (m)        0.06 ± 0.03 [0.04–0.09]      0.08 ± 0.04 [0.06–0.12]         +0.02  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+side_choices                     0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+saved: runs/ab-20261104-042832.json
+real-time checks at >= 1.00x: 6
+both arms: [obstacle] stuck_seconds = 4.0; on: [head] pitch = true, pitch_while_walking = false (head down while stopping/turning and 1.5 s after)
+run folders: /root/runs-archive/ab-head-pitch-6123cee-turnonly (cloud container)
+falls_or_unhealthy: all holds in both arms are robotd's loop below 45 Hz (the container), no falls; 0 contacts of any kind in all 6 runs.

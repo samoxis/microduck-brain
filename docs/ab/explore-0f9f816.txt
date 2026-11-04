@@ -1,0 +1,20 @@
+commit 0f9f816 — explore.enabled OFF: 5 runs, ON: 5 runs
+
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          7.04 ± 1.05 [5.25–8.06]      7.74 ± 1.40 [5.56–9.06]         +0.70  noise (ranges overlap)
+cells                            112.60 ± 16.88 [84–129]      123.80 ± 22.38 [89–145]        +11.20  noise (ranges overlap)
+distance_m                       86.17 ± 2.15 [84.82–89.93]   85.04 ± 0.90 [83.47–85.69]      -1.13  noise (ranges overlap)
+bbox_m2                          19.65 ± 1.97 [16.18–20.78]   21.96 ± 2.08 [20.1–24.98]       +2.31  noise (ranges overlap)
+avoidances                       396.40 ± 53.70 [328–468]     388.00 ± 49.92 [315–434]        -8.40  noise (ranges overlap)
+avoidances_with_stop             39.40 ± 15.69 [18–61]        42.00 ± 17.16 [30–72]           +2.60  noise (ranges overlap)
+big_turns                        8.80 ± 4.60 [3–15]           10.00 ± 6.82 [6–22]             +1.20  noise (ranges overlap)
+turn_s                           26.32 ± 10.53 [11–40.5]      28.02 ± 11.42 [22.2–48.4]       +1.70  noise (ranges overlap)
+falls_or_unhealthy               0.20 ± 0.45 [0–1]            0.00 ± 0.00 [0–0]               -0.20  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   28.56 ± 2.58 [25.04–31.54]   29.62 ± 9.36 [13.28–36.31]      +1.06  noise (ranges overlap)
+avoids/min elsewhere             43.57 ± 5.98 [34.56–50.45]   43.93 ± 4.90 [36.02–47.84]      +0.36  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.40 ± 0.89 [0–2]               +0.40  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            8.60 ± 4.16 [4–15]              +8.60  separated
+side_choices                     0.00 ± 0.00 [0–0]            3.00 ± 2.55 [0–6]               +3.00  noise (ranges overlap)
+saved: runs/ab-20261103-123043.json
+real-time checks at >= 1.00x: 10

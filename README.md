@@ -4,21 +4,64 @@
 
 ![Microduck biped walking in simulation](docs/microduck_walk.gif)
 
-An autonomy layer for **Microduck**, the 25 cm open-source biped from Pollen Robotics / Hugging Face.
-It runs as a separate client and talks to the robot only through its public JSON-RPC API over unix
-sockets — the same calls `robotctl` makes — so it needs no changes to the robot's software.
-Python 3.12, standard library only.
+**A brain for Microduck**, the 25 cm open-source walking duck robot from Pollen Robotics and Hugging
+Face. Out of the box the duck walks where you steer it. With microduck-brain it walks **on its own**:
+it looks with its depth sensor, goes around furniture, toys and stairs, and stops when something
+is wrong.
 
-What the robot does with it:
+> **Status:** tested in Pollen's full simulator (the real robot software and walking policies, in
+> a simulated apartment), not yet on a physical duck. **Have a Microduck?** The guided test takes
+> 5 minutes, sends the duck nothing until the sensors check out, and packs the results into one file
+> to send back: `bash tools/first_test.sh` (see [Quick start](#quick-start)).
 
-- **walks and holds its heading**, cancelling the gait's drift with `odom.yaw` (a small PI loop);
-- **steers around obstacles while walking**, and stops to turn in place only when there is no room;
-- **avoids low objects** (7 cm cubes, 8 cm balls) that are only visible in the bottom rows of its
-  8×8 depth sensor, using a geometric model of the floor;
-- **keeps away from drops** (ledges, stairs going down);
-- **remembers hazards it can no longer see**, in odometry coordinates;
-- **stops sending walking commands when it falls or is unhealthy**, and resumes once it is upright;
-- **records every decision** for exact offline replay and plots.
+## What it does, in plain words
+
+- **Walks straight and steers around things.** It starts steering early, harder the closer it
+  gets, and only stops to turn on the spot when there is no room.
+- **Sees small things on the floor**, like a 7 cm cube or a ball, and **keeps away from stairs and
+  ledges**. It remembers them after they leave its view (they do, close up: the sensor looks ahead).
+- **Stops by itself when it falls or something is wrong** (a failing sensor, a slow control loop),
+  and only walks again once everything has been fine for a moment.
+- **Records everything it decides**, so any run can be replayed exactly, plotted and compared.
+
+Optional, each one switched on in [`brain.toml`](brain.toml) and **off by default** until it has
+been measured:
+
+- **Look down while turning**, so small things right in front stay visible.
+- **Get up when stuck on its side** after a fall.
+- **Go back home**, to where it started.
+- **Notice when it is stuck** (walking but not getting anywhere) and turn away.
+- **Take commands**: stop, go, go home — from a phone app, a voice assistant or a script.
+- **Understand a hand gesture**: hold your hand close in front of its head, then take it away, to
+  stop it or start it again.
+- **Explore**: prefer places it has not been yet. **Scan with its head** while walking.
+  **Correct its position** against walls it has seen. (These three measured no clear gain yet.)
+
+## Features, for the technical reader
+
+It runs as a separate process and talks to the robot only through its public JSON-RPC API over unix
+sockets (the same calls `robotctl` makes), so it needs no changes to the robot's software. Python
+3.12, standard library only. `Brain.tick(inputs) -> command` is a pure state machine (hold, forward,
+brake, turn, bigturn, face, home, paused): every run is recorded and replays bit for bit.
+
+| Feature | Setting | Default | Measured (simulator unless said) |
+|---|---|---|---|
+| Heading hold (PI on `odom.yaw`), steering while walking, stop + turn in place | `[heading]`, `[obstacle]` | on | 0 falls; 132 avoidances in 300 s, 15 needing a stop |
+| Low objects in the bottom rows (floor model from the sensor pose) | `[low]` | on | cubes and balls seen from 0.45–0.7 m with the head level |
+| Drops and stairs (the floor missing where it should be) | `[drop]` | on | the apartment's stairwell found and avoided |
+| Hazard memory (odometry frame), kept through holds, wiped after a fall | `[low]`, `[drop]`, `[obstacle]` | on | — |
+| Safety hold: fallen, limp, unhealthy, no frames or state | `[safety]` | on | no walking command while unsafe (tests) |
+| Look down while stopping and turning | `[head] pitch`, `pitch_while_walking = false` | off | cube hits 4/5 → 0/5; area 6.83 → 8.96 m² |
+| Get up when stuck on its side | `[recover]` | off | 5 of 5 stuck robots up |
+| Go home through walked cells | `[home]` | off | 3 of 3 home, 0.18–0.34 m from the true start |
+| Stuck / wedged (walking without moving) | `[obstacle] stuck_seconds`, `wedge_seconds` | off | wedge: both desk-leg grinds caught, 0 false in 54 runs (replayed) |
+| Commands over a local socket (stop, go, home, toggle) | `[commands]` | off | still within 1 mm while paused, true pose |
+| Hand gesture: held close 0.7–4 s, then taken away | `[gestures]` | off | simulated palm: stop 4/4, go 4/4; 0 false in 8.6 h; no real hand yet |
+| Explore, head scan, odometry correction | `[explore]`, `[head] scan`, `[localize]` | off | noise in the full simulator |
+| Observe mode + sensor check before walking | `--observe`, `tools/first_robot_check.py` | — | all checks pass on simulator recordings |
+| Guided first test on a real duck | `tools/first_test.sh` | — | run end to end in the simulator |
+
+Every number has its table or recording below; what was not verified is said next to it.
 
 ![A 300 s run in the full simulator, apartment scene](docs/full-sim-run.svg)
 
@@ -32,18 +75,128 @@ from the robot's own odometry. The recording is in [`docs/`](docs/) and replays 
 
 | Where | What was measured | Result |
 |---|---|---|
-| Full simulator, official walking policies (run by the author, [`tools/full_sim_run.sh`](tools/full_sim_run.sh)) | v0.3 (all behaviours), 300 s in the apartment | 44 m walked, 6.5 m² covered; 132 avoidances, 15 needing a stop; both low objects met (a ball, a cube) detected and avoided; the stairwell detected, closest approach of the trunk to its edge 0.18 m, never over it; **0 falls**; replay exact (5988 ticks) |
+| Full simulator, official walking policies (run by the author, [`tools/full_sim_run.sh`](tools/full_sim_run.sh)) | v0.3 (all the behaviours of then, before the optional ones), 300 s in the apartment | 44 m walked, 6.5 m² covered; 132 avoidances, 15 needing a stop; both low objects met (a ball, a cube) detected and avoided; the stairwell detected, closest approach of the trunk to its edge 0.18 m, never over it; **0 falls**; replay exact (5988 ticks) |
 | Full simulator, official walking policies (run by the author) | v1 (before low objects and drops), 150 s in the apartment | 85 avoidances, only 4 needing a full stop; **0 falls**; area covered 4.5 × 3.4 m |
 | Full simulator (run by the author) | Minimum commanded speeds at which the policy steps | 0.20 m/s forward, 1.1 rad/s turning; real speed ≈ 40% (forward) and 46–69% (turning) of commanded |
 | MuJoCo apartment, kinematic body, real ToF model ([`tools/kinematic_apartment.py`](tools/kinematic_apartment.py); one run drawn in [`docs/apartment-run.svg`](docs/apartment-run.svg)) | 12 runs × 300 s from 6 rooms, two real turn rates: 334 m walked | **0 toy contacts, 0 entries over the stairwell**, 2 grazes of furniture (down from 22, see *Findings*), 791 avoidances |
 | Real MuJoCo sensor frames ([`tests/fixtures/`](tests/fixtures/)) | Floor model vs. the simulated sensor | error σ 0.8% (max 2.8%) |
 | Real MuJoCo sensor frames | False alarms on empty floor, trunk tilted ±3° pitch and roll | **0** in 96 frames (low objects) and 0 in 304 frames (drops, incl. 64 frames across the apartment's rooms) |
-| Test suite | 176 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
+| Flat 2-D worlds, real beam geometry, measured real/commanded ratios ([`tests/world2d.py`](tests/world2d.py)) | Exploration on vs. off: 4 rooms × 30 seeds × 600 s | Area covered **+71%** (35.0 vs 20.5 m² summed over the 4 rooms, mean of 3 × 10 seeds), **0 contacts** in 120 runs either way |
+| Full simulator, official walking policies (run by the author), apartment, 600 s each | Exploration off vs. on, first version (3fedf98) | Area 7.31 vs 7.50 m² (+2.6%, within single-run noise); avoidances 194 vs 327; 3 bends but 27 "aborts" — a bug: the abort rule also reset the ordinary heading hold near walls. Fixed; re-measured in the next row |
+| Full simulator in a 4-core cloud container (`tools/ab_full_sim.sh`), apartment, 5 + 5 runs of 600 s alternating, frozen commit `0f9f816` | Exploration off vs. on | Area 7.04 ± 1.05 vs 7.74 ± 1.40 m² (5.25–8.06 vs 5.56–9.06): **noise**, the ranges overlap; avoidances 396 vs 388, noise; 0 falls (the one "fall or unhealthy" hold, off arm, was the container's slow loop). Why: 0.4 bends a run (2-D: ~20), because 43 of 45 attempts were refused — something beside the body (the apartment is cramped for a 10 cm/s robot) |
+| Full simulator, cloud container, apartment, 5 + 5 runs of 600 s alternating, frozen commit `3b323ee` | Head scan off vs. on (±25°, 2.5 s) | Area 7.25 ± 1.30 vs 5.65 ± 2.26 m², avoidances 365 vs 410: **noise** both, the ranges overlap (the trend is the wrong way: −22% area). 0 falls with the scan on. Contacts, what the scan is for, were not measured in these runs (measured since: `MEASURE=1`) |
+| Real MuJoCo frames, head pitched down with robot.head (`tests/fixtures/mujoco_head_pitch.json`) | Where a 7 cm cube is seen, and false alarms on empty floor | Level head: from 0.50 m. Pitched 20°: **from 0.20 m, no gap to 0.60 m**; 28.6°: from 0.16 m. 0 alarms in 48 empty-floor frames (the level-head arithmetic, unaware of the pitch, reads the floor as a wall in all 24 frames at ≥ 20°) |
+| Full simulator, cloud container, apartment, 3 + 3 runs of 600 s with contacts logged (`MEASURE=1`), commit `59b7f5d` | Head pitch off vs. on (20° down while stopping, turning, approaching) | **Worse, and clearly** (ranges separated): area 8.23 → 4.00 m², full stops 29 → 108, big turns 6 → 33; 0 falls either way; toy contacts 0 and 0. Cause: 570–700 "low objects" a run (10–20 level), ~14 000 returns, most 0.7–1.5 m away on furniture and wall feet (the sensor was 25–28° down with the trunk's lean). A gate added since (pitched: only within 0.5 m and under 10 cm) cuts them by 85% on the same recording, but all 2 080 left are still false (none within 12 cm of a toy, from the true pose). **Not usable yet; off**. Then a 4 cm minimum height for pitched low objects (from a 300 s pitched run with the true pose: the false ones sat at a median 3 cm, real toys at 7 cm): low objects back to the level head's count and coverage no longer lost (6.79 → 8.65 m², noise), but one pitched run ground against a desk leg (435 furniture contacts; [`docs/ab/head-pitch-0a93159.txt`](docs/ab/head-pitch-0a93159.txt)). But with the stuck detector on in both arms, **furniture contacts 0 → 4–22 a run (separated)**, all on one desk leg beside the feet: pitched 22–30°, the sensor sees only floor 0.3–1.4 m ahead, so nothing tall beside the path is seen or remembered ([`docs/ab/head-pitch-0a93159-stuck4.txt`](docs/ab/head-pitch-0a93159-stuck4.txt)). Looking down while walking traded the close cubes for the legs beside the body. **Then pitched only while stopping or turning in place** (`pitch_while_walking = false`), stuck detector on in both arms, 3 + 3 runs: area **4.58 → 9.56 m², separated**; full stops 50 → 33 and big turns 13 → 5, separated; furniture contacts 0 with it (one run without it: 120, on the same desk leg); toy contacts 0 and 0; no falls with it (its 2 holds were the container's slow loop) ([`docs/ab/head-pitch-b62de6c-turnonly.txt`](docs/ab/head-pitch-b62de6c-turnonly.txt)). Likely why: turning with the head down, the robot judges "clear" on the near floor and ends its turns sooner. Then the case itself, in a scene built for it ([`tools/scenes/cube_after_turn.xml`](tools/scenes/cube_after_turn.xml), [`tools/cube_trials.sh`](tools/cube_trials.sh)): a wall right ahead, a 7 cm cube on each side on the path after the turn, closer than 45 cm. Head level: **walked into the cube in 4 of 5 runs** (50–643 contacts), never saw it. Head down while turning and 1.5 s after (the first version levelled at once and saw the cube in one frame only): **0 of 5, the cube seen every time** ([`docs/ab/cube-after-turn-6123cee.txt`](docs/ab/cube-after-turn-6123cee.txt)). And in the apartment with that final mode, 3 + 3 runs: area 6.83 → 8.96 m² (separated), **0 contacts of any kind either way**, no falls ([`docs/ab/head-pitch-6123cee-turnonly.txt`](docs/ab/head-pitch-6123cee-turnonly.txt)). Natural encounters, from the true pose in all 35 archived apartment runs: 35 approaches of the trunk within 30 cm of a toy (10 with the head level, 6 pitched while walking, 19 turn-only), **0 toy contacts in every mode** — met in the open, a toy is usually seen from afar and remembered (findings 3–4). Not always: in a later run with the head level the robot walked into a cube for 10 s (98 contacts, [`docs/ab/autonomy-5f11209.txt`](docs/ab/autonomy-5f11209.txt)), the scripted case happening by itself. **A usable opt-in**: `[head] pitch = true`, `pitch_while_walking = false` (with `[obstacle] stuck_seconds = 4`, as measured) |
+| Flat 2-D worlds, 5 rooms incl. the dining room, homing after 240 s of walking (`[home]`, stuck detector on) | Gets back to where it started? | Fresh seeds 30–39: **arrived 100/100**, usually in 10–60 s; **0 contacts while homing** (3 contacts in the first 240 s, the same with homing off). Odometry is perfect here: in the full simulator home is only as good as the odometry |
+| Flat 2-D worlds, a dining room with 28 table and chair legs of 3 cm, body 11 cm wide | Head scan off vs. on (±25°, 2.5 s), 30 runs × 600 s each | Contacts with legs **2 → 0** (at 12 cm: 3 → 1 in 15 runs); area +5–15%; but 2–4× more full stops, since it now sees what it used to brush past |
+| Full simulator, cloud container, head scan on, 300 s | Does the policy keep its balance, does the sensor turn? | 0 falls; measured head yaw −27°…+29° for ±25° commanded, 0.3 s behind, 4° rms; replay exact |
+| Full simulator, cloud container (`tools/push/push_trials.sh`) | Shoved sideways, ±1–3 m/s, 10 trials from a fresh simulator | Fell every time; **got up by itself 9 of 10** (2.0–2.8 s), once stuck on its side. With the brain running: walking again 4 s after the shove |
+| Full simulator, cloud container, brain running, 2 × 20 shoves (±1–3 m/s) | `[recover]` off vs. on | Recovery off: 19 falls, all up by themselves in 1.9–3.1 s. Recovery on: 18 falls, 13 up by themselves; **5 stuck on their side** (gravity horizontal, 5–6 s without progress) **and all 5 up after one recovery**, 0.5 s after the policy restarts (10–13 s after the shove). Over all 47 falls so far, 6 stuck on a side: 13% |
+| Full simulator, cloud container, `MEASURE=1`, homing after 300 s, 2 × 3 runs of 600 s | Gets back to where it started, measured with the true pose? | First 3: 2 home (true distance to the start 0.32, 0.36 m), 1 never — no path, 86 of 92 walked cells mapped as walls (fixed: a walked cell is never a wall). Next 3: 2 home (0.34, 0.43 m, in 183 and 51 s), and 1 that fell, set "home" where it got up and reported arriving 2.1 m from the start (fixed: after a fall homing is abandoned for the run). **0 contacts** in all 6. Then 3 more at commit `3d02104`, with both fixes: **3 of 3 home**, true distance to the start 0.18–0.34 m, in 23–65 s, 0 contacts, odometry within 1.4–6.2 cm of the truth |
+| Full simulator, cloud container, `MEASURE=1` (true trunk pose), 3 runs of 600 s | How far the odometry drifts | **Very little**: final error 0.03–0.11 m, at most 0.15 m in 600 s (yaw within ~7°) |
+| Same 3 recordings, replayed with `[localize]` on (`tools/odom_truth.py --localize`) | Does matching walls against the map correct it? | First version: **no, worse** (final 0.23–0.71 m). Two causes traced: distances to cell *centres* rewarded snapping points to the grid, and frames taken while turning lag the pose by up to a frame (≈3° at 0.77 rad/s). Fixed (mean wall point per cell; frames above 0.05 rad/s skipped). Now, on 6 other full-simulator runs: still **worse**, by less (raw 0.01–0.10 m, corrected 0.04–0.27 m). 2-D, fresh seeds: perfect odometry stays perfect (0.00–0.01 m), medium drift halved (0.34 → 0.17, 0.44 → 0.23 m), strong drift a little (0.82 → 0.65, 0.92 → 0.85 m). It helps where drift is large; the simulator's odometry is too good to need it. Then stricter (a shift must win by 2 cm and 50%), tuned on 3 recordings: on the 6 others, **noise** — 2 better, 1 the same, 3 worse, mean final error 0.04 m raw vs 0.06 m corrected (it had been up to 0.71 m); 2-D: perfect odometry stays 0.00 m, medium drift down ~25% (0.37 → 0.27, 0.47 → 0.35 m). Last test, the drift the simulator lacks: the 9 recordings' odometry degraded like a slipping robot's (`tools/odom_truth.py --drift`: heading +0.0009 rad/s and distances ×1.02, or +0.002 and ×1.03), corrected on the real frames, compared with the true pose: **no improvement** — mean error drifted vs corrected within ±10% each way (e.g. 0.52 → 0.53, 0.45 → 0.44 m medium; 1.16 → 1.12, 0.99 → 1.06 m strong). The 2-D gain doesn't carry over to real frames: strict, it rarely acts; loose, its matches are wrong. Then a second method, `method = "icp"`: each return paired with the nearest wall point seen ≥ 20 s earlier (within 15 cm), the rigid motion aligning the pairs solved in closed form, 30% of it applied (≤ 1.5 cm, ≤ 0.5° a step) if it lowers their mean distance. Tuned on 3 recordings, held out 6: **medium drift lower in 5 of 6 runs** (mean 0.38 → 0.36 m, −8%), **strong drift lower in 5 of 6** (−3%), but **+2–5 cm with good odometry**. A small, consistent gain under drift, a small cost without it. **Off**; if odometry on the real robot drifts, `method = "icp"` is the one to try |
+| Full simulator, all 54 archived recordings replayed, plus a scene built for the case ([`tools/desk_leg_trials.sh`](tools/desk_leg_trials.sh)) | Wedge detector (`[obstacle] wedge_seconds = 2.5`): walking but covering under 8% of the commanded distance | The case: grinding against a desk leg, 5 cm in 3.6 s, until it fell (120 and 435 contacts in two runs); the stuck detector missed it because each 5 cm of creep reset it. Replayed: **catches both, 0 false firings in 54 runs** (2.4 s after the first contact, 4.9 s before the fall). A 25% threshold fired falsely in 22 runs: the simulated gait covers only ~35% of the command over 2.5 s of walking, steering included (≈42% walking straight, see `[motion]`). In 6 runs started 6–11 s before the spot the long wedge did not recur (brushes only, 0 falls), so **its effect closed-loop is not measured**. Opt-in, off ([`docs/ab/desk-leg-wedge.txt`](docs/ab/desk-leg-wedge.txt)) |
+| Full simulator, cloud container, `MEASURE=1`, 3 + 3 runs of 600 s alternating, commit `5f11209` | Profile "autonomy" vs. defaults: recover, head pitch only while turning, stuck 4 s, wedge 2.5 s (`AB_SET` in `tools/ab_full_sim.sh`) | **Noise** on all metrics but one: area 7.08 → 7.85 m², toy contacts 34 ± 55 → 0 (one level-head run walked into a cube for 10 s, finding 3), furniture 0 → 1.7 ± 2.9 (one 1 s brush on the desk leg, braked at once); avoids/min after a turn in place 30.4 → 25.9, separated. 0 falls either way (all holds were the container's slow loop), so recovery, stuck and wedge never fired. No cost seen; not the default ([`docs/ab/autonomy-5f11209.txt`](docs/ab/autonomy-5f11209.txt)) |
+| Full simulator, `MEASURE=1`, 90 s; and all 67 recordings (8.6 h) replayed | `[commands]` stop / go over the socket; `[gestures]` false positives | Stop at 30 s, go at 51 s: **moved 1 mm** (true pose) while paused, 0 move commands, walked on after the go; replay 0 differing. Gesture: 2 false in 8.6 h (furniture swept past the head while turning in place), **0 once a turn in place cancels it**. With a simulated 9 × 9 cm palm held 10 cm in front (4 runs, `tools/gesture_trials.sh`): stop 4/4, go again 4/4, a 6 s hold ignored 4/4, 0 contacts. A real hand is not tested ([`docs/ab/commands-gestures.txt`](docs/ab/commands-gestures.txt)) |
+| Flat 2-D dining room, 28 legs of 3 cm, 30 + 30 runs of 600 s (tuning, then holdout seeds) | Thin legs beside the body: longer side memory, beside-aware steering, a look-around at the start | Cause of every contact: a turn or steer towards a leg beside the body, outside the 45° view, never seen or forgotten 1.6 s before. **No fix helped on the holdout seeds** (4 contacts with each, ~1 per 3 h of walking); none kept ([`docs/ab/thin-legs.txt`](docs/ab/thin-legs.txt)) |
+| Full simulator, cloud container, `MEASURE=1`, 5 + 5 runs of 600 s alternating, commit `40bed33` | Proposed default profile (head pitch while turning + `[recover]`) vs today's defaults | Area **6.68 → 9.25 m² (+38%)**, ranges touch (5–8.12 vs 8–10.19): noise by the rule, just; **0 contacts** either way; 0 falls (the holds are the container's slow loop: 1 vs 7). Third A/B with the same lean, after two separated ones ([`docs/ab/default-profile-40bed33.txt`](docs/ab/default-profile-40bed33.txt)) |
+| Test suite | 286 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
 
-**What has not been verified**: anything on a physical robot (the author doesn't have one yet). In
-the full-simulator run, contacts with furniture are not measured (the headless simulator doesn't report
-them), and positions come from odometry, which drifts; the contact counts above are from the kinematic
-runs only.
+**What has not been verified**: anything on a physical robot (the author doesn't have one yet). The
+first full-simulator rows above have no contact counts and use the odometry's positions; the rows
+marked `MEASURE=1` count contacts with furniture, toys and stairs from the simulator itself and use
+the trunk's true pose.
+
+## Full-simulator A/B tables
+
+Each row: mean ± sd [min–max] over the runs, and "separated" only when the two groups' ranges don't
+overlap. Pollen's simulator in a 4-core cloud container, apartment scene, 600 s runs alternating
+off/on, each from a freshly started simulator, from a frozen copy of the given commit. The run
+folders themselves (recordings, plots) were lost when that copy was refreshed; the tables below are
+the tool's own output, kept verbatim.
+
+**Exploration off vs. on, 5 + 5 runs** ([`docs/ab/explore-0f9f816.txt`](docs/ab/explore-0f9f816.txt))
+
+```text
+commit 0f9f816 — explore.enabled OFF: 5 runs, ON: 5 runs
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          7.04 ± 1.05 [5.25–8.06]      7.74 ± 1.40 [5.56–9.06]         +0.70  noise (ranges overlap)
+cells                            112.60 ± 16.88 [84–129]      123.80 ± 22.38 [89–145]        +11.20  noise (ranges overlap)
+distance_m                       86.17 ± 2.15 [84.82–89.93]   85.04 ± 0.90 [83.47–85.69]      -1.13  noise (ranges overlap)
+bbox_m2                          19.65 ± 1.97 [16.18–20.78]   21.96 ± 2.08 [20.1–24.98]       +2.31  noise (ranges overlap)
+avoidances                       396.40 ± 53.70 [328–468]     388.00 ± 49.92 [315–434]        -8.40  noise (ranges overlap)
+avoidances_with_stop             39.40 ± 15.69 [18–61]        42.00 ± 17.16 [30–72]           +2.60  noise (ranges overlap)
+big_turns                        8.80 ± 4.60 [3–15]           10.00 ± 6.82 [6–22]             +1.20  noise (ranges overlap)
+turn_s                           26.32 ± 10.53 [11–40.5]      28.02 ± 11.42 [22.2–48.4]       +1.70  noise (ranges overlap)
+falls_or_unhealthy               0.20 ± 0.45 [0–1]            0.00 ± 0.00 [0–0]               -0.20  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   28.56 ± 2.58 [25.04–31.54]   29.62 ± 9.36 [13.28–36.31]      +1.06  noise (ranges overlap)
+avoids/min elsewhere             43.57 ± 5.98 [34.56–50.45]   43.93 ± 4.90 [36.02–47.84]      +0.36  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.40 ± 0.89 [0–2]               +0.40  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            8.60 ± 4.16 [4–15]              +8.60  separated
+side_choices                     0.00 ± 0.00 [0–0]            3.00 ± 2.55 [0–6]               +3.00  noise (ranges overlap)
+real-time checks at >= 1.00x: 10
+```
+
+Repeated at the same commit, with the run folders kept this time ([`docs/ab/explore-0f9f816-rerun.txt`](docs/ab/explore-0f9f816-rerun.txt)): area 6.30 ± 1.41 vs 6.90 ± 2.98 m², avoidances 391 vs 379 — noise again, the same conclusion with different numbers, which is what noise looks like.
+
+**Head scan off vs. on, 5 + 5 runs** ([`docs/ab/head-scan-3b323ee.txt`](docs/ab/head-scan-3b323ee.txt))
+
+```text
+commit 3b323ee — head.scan OFF: 5 runs, ON: 5 runs
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          7.25 ± 1.30 [5.5–8.94]       5.65 ± 2.26 [3.81–8.56]         -1.60  noise (ranges overlap)
+cells                            116.00 ± 20.80 [88–143]      90.40 ± 36.14 [61–137]         -25.60  noise (ranges overlap)
+distance_m                       85.42 ± 1.42 [83.49–87.28]   84.72 ± 0.22 [84.43–84.99]      -0.70  noise (ranges overlap)
+bbox_m2                          23.27 ± 7.31 [14.49–34.53]   13.12 ± 10.36 [5.53–25.02]     -10.15  noise (ranges overlap)
+avoidances                       365.00 ± 74.17 [251–445]     409.80 ± 31.49 [371–441]       +44.80  noise (ranges overlap)
+avoidances_with_stop             37.80 ± 16.08 [19–60]        43.60 ± 4.16 [38–48]            +5.80  noise (ranges overlap)
+big_turns                        8.80 ± 5.31 [1–15]           8.80 ± 1.30 [8–11]              +0.00  noise (ranges overlap)
+turn_s                           23.50 ± 7.98 [15.4–35.4]     27.92 ± 3.68 [24.8–32.9]        +4.42  noise (ranges overlap)
+falls_or_unhealthy               0.60 ± 1.34 [0–3]            0.00 ± 0.00 [0–0]               -0.60  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   26.29 ± 4.96 [19.58–31.15]   26.79 ± 3.78 [20.87–31.11]      +0.50  noise (ranges overlap)
+avoids/min elsewhere             40.23 ± 8.67 [28.76–49.84]   47.84 ± 4.16 [42.69–52.66]      +7.61  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+side_choices                     0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+real-time checks at >= 1.00x: 10
+```
+
+Repeated at the same commit, run folders kept ([`docs/ab/head-scan-3b323ee-rerun.txt`](docs/ab/head-scan-3b323ee-rerun.txt)): area 8.02 ± 1.44 vs 5.29 ± 1.39 m², avoidances 361 vs 406. Each time the ranges overlap (noise), but both times the scan covered less (−22%, −34%): not a signal, and nothing in its favour either.
+
+**Head pitch off vs. on, 3 + 3 runs, contacts and true pose logged** ([`docs/ab/head-pitch-59b7f5d.txt`](docs/ab/head-pitch-59b7f5d.txt))
+
+```text
+commit 59b7f5d — head.pitch OFF: 3 runs, ON: 3 runs
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          8.23 ± 0.90 [7.19–8.75]      4.00 ± 1.09 [3.06–5.19]         -4.23  separated
+cells                            131.67 ± 14.43 [115–140]     64.00 ± 17.35 [49–83]          -67.67  separated
+distance_m                       85.53 ± 0.13 [85.44–85.68]   81.93 ± 0.96 [80.85–82.71]      -3.60  separated
+bbox_m2                          27.54 ± 7.91 [20.95–36.32]   8.03 ± 5.54 [4.47–14.41]       -19.51  separated
+avoidances                       412.67 ± 30.66 [384–445]     405.33 ± 23.18 [384–430]        -7.34  noise (ranges overlap)
+avoidances_with_stop             28.67 ± 3.06 [26–32]         108.33 ± 20.79 [93–132]        +79.66  separated
+big_turns                        6.00 ± 1.00 [5–7]            33.00 ± 7.21 [27–41]           +27.00  separated
+turn_s                           19.87 ± 4.74 [14.4–22.7]     59.13 ± 9.61 [49.3–68.5]       +39.26  separated
+falls_or_unhealthy               0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   28.54 ± 1.33 [27.15–29.8]    37.89 ± 1.98 [35.7–39.54]       +9.35  separated
+avoids/min elsewhere             45.15 ± 3.69 [41.38–48.76]   46.27 ± 4.36 [41.31–49.46]      +1.12  noise (ranges overlap)
+contacts: furniture              1.33 ± 2.31 [0–4]            0.00 ± 0.00 [0–0]               -1.33  noise (ranges overlap)
+contacts: toys                   0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+contacts: stairs                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+odometry error, final (m)        0.08 ± 0.05 [0.05–0.14]      0.09 ± 0.02 [0.07–0.1]          +0.01  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+side_choices                     0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+real-time checks at >= 1.00x: 6
+```
+
+**Recommendation**: keep exploration and the head scan off: no signal in the apartment (noise in
+every metric that matters). The head pitch was clearly worse in its first version (above), and
+clearly better once it looks down only while stopping and turning (`pitch_while_walking = false`:
+area separated in two A/Bs, 0 of 5 cube hits vs 4 of 5); with `[recover]` (5 of 5 stuck robots up)
+it is the one worth turning on — after a check on a physical robot. Defaults are unchanged until then.
 
 ## Findings worth knowing
 
@@ -77,6 +230,41 @@ These came out of measuring rather than assuming, and each one changed the desig
    outside the 45° field of view — while the robot arced away from something on its left; a longer
    memory didn't remove them, a wider view would (turning the head, or the camera).
 
+7. **Without a goal, the brain settles into a loop.** In the flat 2-D worlds the reactive brain
+   covers the same area at 300 s and at 900 s (4.19 vs 4.21 m² in a 4×3 m room): it follows the
+   walls on a fixed circuit. Exploration breaks the loop with a handful of decisions per run (a few
+   heading bends and side choices): +46% area. Its first version bent the heading towards a table
+   corner beside the right leg — finding 6 again, plus the side memory expiring before the slow
+   robot had walked past — so a side with anything near the body now gets no bends for 4 s.
+   In the full simulator that abort rule misfired: it also cancelled the ordinary heading hold
+   whenever the swaying trunk put the heading 6° off near a wall (27 "aborts" for 3 bends, and 69%
+   more avoidances). Only a bend in progress can be aborted now, and every bend, refusal and abort
+   is logged with its reason (`tools/explore_report.py` replays a recording and lists them).
+   Next, 29 of 32 refusals in the full simulator were for bends to the right. In the 2-D worlds,
+   with the walls known: 94% of all refusals pointed at a direction whose probed cells were *all*
+   beyond a wall, and 82% were towards the side the nearest wall was on. "Unvisited" includes cells
+   the robot can never reach; the side rule was refusing bends into walls, which is right, but it
+   means the novelty measure is wrong, not the side rule. Now the wall returns are remembered as
+   blocked cells and a probe stops at the first one. That roughly doubled the bends that complete,
+   and the 2-D coverage went from +48% to +71%, with two more guards from the same map: no bend
+   towards a wall remembered beside the body, none onto a course with a wall within 0.75 m (a table
+   corner met head-on shows in a single zone, which the brain ignores as noise).
+
+8. **Homing fought the avoidance.** The first version of going home, in the 2-D dining room, had a
+   robot wedged between a table leg and a chair leg turn away (the avoidance), turn back towards
+   home (the homing), and again, 65 times. Three fixes, each traced: plan a cell clear of remembered
+   walls; after a full stop, homing gives way for 4 s counted from when it walks again (yielding to
+   every small steer instead kept a robot circling a room for ever, wall to wall); and a stuck
+   detector for a robot pressing on a leg the sensor reads as nothing, closer than its shortest
+   range — it turns away from what is nearest beside it, all the way round.
+9. **Looking down needs the whole pose, and is not enough.** Pitching the head 20° brings the 7 cm cube into view
+   from 20 cm, but with the old arithmetic the upper rows, now seeing the floor, read it as a wall
+   in every frame. With the head allowed to pitch, every return is placed with the sensor's full
+   pose and a return that lands on the floor is floor, whatever row it is in. That made it right on
+   the MuJoCo test frames (open floor, one object) and wrong in the apartment: there, pitched, the
+   floor model is off by enough at a grazing angle that furniture and wall feet read as low objects
+   by the hundred. Measured with the true pose and the toys' positions: none of them was a toy.
+
 ## How it works
 
 ```mermaid
@@ -100,6 +288,10 @@ flowchart LR
   `safety.gravity`, `odom.position[2]`) — the same inputs the robot's own floor filter uses. Shorter
   means an object, longer (or nothing) means a drop.
 - **`hazards.py`** confirms detections over time and remembers them in odometry coordinates.
+- **`explore.py`** (optional) remembers the grid cells the robot has walked through, in odometry
+  coordinates. At an obstacle, when both sides are about equally free, the brain turns towards the
+  less visited one; while walking with a clear way it now and then bends its heading towards a less
+  visited direction, within 60°.
 - **`brain.py`** is the state machine. A safety guard sits above every state: fallen, unhealthy or
   blind means `hold`. New behaviours (dance, rest, play) are states registered with `brain.register()`.
 - **`runner.py` / `ipc.py`** speak NDJSON JSON-RPC 2.0 to `robotd` and `tofd`, with the formats
@@ -109,8 +301,10 @@ flowchart LR
 
 ## Quick start
 
-On Linux or WSL, with Pollen's [`microduck`](https://github.com/pollen-robotics/microduck) and
-[`microduck_rl`](https://github.com/pollen-robotics/microduck_rl) checked out and the simulator running:
+In the simulator: on Linux or WSL, with Pollen's [`microduck`](https://github.com/pollen-robotics/microduck)
+and [`microduck_rl`](https://github.com/pollen-robotics/microduck_rl) checked out in `~/microduck` and
+`~/microduck_rl` (`tools/full_sim_run.sh` below starts the simulator headless by itself; to start it by
+hand, see `scripts/duck-sim` in `microduck`). The first command makes the simulated robot **walk**:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh        # once
@@ -121,7 +315,48 @@ uv run microduck-brain --duration 180 --record run.jsonl.gz
 uv run microduck-brain-replay run.jsonl.gz              # must report 0 differing commands
 uv run microduck-brain-plot run.jsonl.gz -o run.svg
 uv run pytest                                           # the test suite
+uv run python -m tests.world2d --seconds 300            # coverage benchmark, exploration on vs. off
 ```
+
+**On a physical robot, the easiest is the guided first test**: on the duck's own computer, in this
+folder, `bash tools/first_test.sh`. It checks the setup, watches 60 s with the duck on a stand
+(nothing sent to it), checks that recording, and only if everything passes and you say yes lets it
+walk 30 s; then it packs the results into one file to send back. Run end to end against the
+simulator (all checks PASS, 13 s walked, replay 0 differing); not yet on a physical duck.
+
+By hand: **on a physical robot, never start with the commands above.** The brain runs on the robot's own
+computer (robotd and tofd are reached through local unix sockets, `/run/robotd.sock` and
+`/run/tofd/tof.sock`), with uv and Python 3.12 there. Start with `--observe`, the robot standing
+on a stand (held by hand it tilts too much for the check): nothing is sent to the robot, and the
+recording shows what the brain would have done. Then check the recording before letting it walk:
+frame rate, valid zones, dead zones, sensor pose, tilt, trunk height, odometry and exact replay,
+each PASS / WARN / FAIL with its number (exit code 1 on any FAIL; it reads `./brain.toml` like the
+brain does):
+
+```bash
+uv run microduck-brain --observe --duration 60 --record first.jsonl.gz
+uv run python tools/first_robot_check.py first.jsonl.gz
+```
+
+On a 600 s full-simulator recording every check passes (14.6 Hz, 100% valid zones, tilt 2.8°,
+trunk 0.120 m, 0 differing); the thresholds are not yet checked against a physical robot.
+
+**Commands and the hand gesture.** With `[commands] enabled = true` the brain listens on a local
+socket that only your user can open, and anything that can write a line of JSON to it can drive the
+duck — a phone app, a voice assistant, a script:
+
+```bash
+uv run microduck-brain-cmd stop        # stand still until "go"
+uv run microduck-brain-cmd go
+uv run microduck-brain-cmd home        # back to the start (needs [home] enabled = true)
+uv run microduck-brain-cmd status      # what it is doing, as JSON
+```
+
+The wire format is one JSON-RPC line, `{"jsonrpc":"2.0","id":1,"method":"brain.command","params":{"name":"stop"}}`
+(see [`commands.py`](src/microduck_brain/commands.py)). With `[gestures] enabled = true`, hold a
+hand about 10 cm in front of its head for one to four seconds, then take it away: a walking duck
+stops, a stopped one walks on. Commands and gestures are recorded like everything else, so the run
+still replays exactly. The safety hold always wins: no command makes it walk while it is not safe.
 
 Sockets are found automatically (the simulator's under `~/.cache/duck-sim/`, else the robot's under
 `/run/`); `--robot-socket` / `--tof-socket` override them. Every parameter is documented in
@@ -134,22 +369,42 @@ the duck stands and the world runs at real time, runs the brain, replays and plo
 bash tools/full_sim_run.sh                # 300 s; SECONDS_TO_RUN=600 for longer
 ```
 
+Exploration off vs. on in the full simulator, same commit, 3 + 3 runs of 600 s alternating, with
+mean, spread and range per metric (a difference counts only if the ranges don't overlap):
+
+```bash
+bash tools/ab_full_sim.sh                 # RUNS=5 for more; output in runs/ab-<timestamp>.json
+```
+
 The kinematic apartment runs and the simulator fixtures are regenerated with `microduck_rl`'s venv:
 
 ```bash
 cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/kinematic_apartment.py --seconds 300 --svg run.svg
-cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py [--drop]
+cd ~/microduck_rl && .venv/bin/python ~/microduck-brain/tools/capture_low_fixtures.py [--drop | --head-pitch]
 ```
 
 ## Limitations
 
 - Not yet run on a physical robot. The kinematic runs move the body ideally (no balance, no slip)
   with perfect odometry; in the full simulator the trunk sways ±2–3° and the odometry drifts.
-- An object that was never seen from a distance (already under the lowest beam) cannot be detected;
+- With the head level, an object that was never seen from a distance (already under the lowest beam)
+  cannot be detected (`[head] pitch` sees it from 20 cm, measured in the simulator);
   nor can a drop narrower than the blind zone ahead (~0.7 m) approached from the side without having
   been seen. Glass is invisible to the sensor.
-- After a fall the brain waits; it does not try to stand the robot up.
-- The 45° field of view is narrow while turning (finding 6).
+- After a fall the brain waits; it does not try to stand the robot up. Pollen's stack has no
+  get-up policy (the policies are walk/stand, sit-stand, ground pick, kicks and the roulade), and a
+  brain can only ask for movements that exist. It doesn't need to: robotd goes limp as it falls,
+  then poses back to standing and hands over to the walk. In the full simulator
+  ([`tools/push/push_trials.sh`](tools/push/push_trials.sh)), 10 sideways shoves of ±1–3 m/s each
+  knocked it over; it got up by itself 9 times, in 2.0–2.8 s, and once stayed on its side. With the
+  brain running, it walked on 4 s after a shove (the hold, then `resume_delay`). A duck stuck on its
+  side is handled only with `[recover]` on (measured in the simulator only: 5 of 5). On a physical
+  robot, `robot.init` drives the joints against the floor, as robotd's own landing sequence does.
+- Exploration helps in flat 2-D worlds (+71% area) but is noise in the full simulator's apartment
+  (5 + 5 runs): nearly every bend is refused there, something being beside the body. Its map is in
+  odometry coordinates, so it drifts with the odometry, and it is forgotten after a fall.
+- The 45° field of view is narrow while turning (finding 6). The head scan addresses it: 2 → 0 leg
+  contacts in the 2-D dining room, noise in the full simulator.
 
 ## How this was built
 

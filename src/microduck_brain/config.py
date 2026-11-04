@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import tomllib
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
@@ -44,6 +46,9 @@ class Obstacle:
     corridor_half_width: float = 0.14
     sensor_lateral: float = 0.0224
     side_memory_seconds: float = 3.0
+    stuck_seconds: float = 0.0
+    wedge_seconds: float = 0.0
+    wedge_ratio: float = 0.08
 
 
 @dataclass
@@ -96,6 +101,99 @@ class Heading:
 
 
 @dataclass
+class Explore:
+    """Prefer directions not visited yet (see explore.py). Off by default: noise in the full simulator."""
+
+    enabled: bool = False
+    cell: float = 0.25
+    turn_margin: float = 1.5
+    steer_margin: float = 0.0
+    bend_every: float = 4.0
+    bend_min_clear: float = 0.7
+    max_bend_deg: float = 60.0
+    novelty_margin: float = 0.3
+
+
+@dataclass
+class Head:
+    """The head (the ToF sensor is on it): scanning while walking, looking down while turning (brain.py). Off by default."""
+
+    scan: bool = False
+    amplitude_deg: float = 25.0
+    period: float = 2.5
+    side_free_seconds: float = 3.0
+    pitch: bool = False
+    pitch_down_deg: float = 20.0
+    pitch_after_turn: float = 1.5
+    pitch_while_walking: bool = True
+
+
+@dataclass
+class Home:
+    """Go back to where it started (see home.py). Off by default."""
+
+    enabled: bool = False
+    after_seconds: float = 240.0
+    arrive_radius: float = 0.35
+    lookahead_cells: int = 3
+    face_threshold_deg: float = 60.0
+    replan_every: float = 1.0
+    yield_seconds: float = 4.0
+
+
+@dataclass
+class Commands:
+    """Commands from outside (see commands.py): stop, go, home, toggle over a local socket, for a
+    phone, a voice app or a script. Off by default."""
+
+    enabled: bool = False
+    socket: str = ""             # "" = $XDG_RUNTIME_DIR/microduck-brain.sock, else /tmp/microduck-brain-<uid>.sock
+    start_paused: bool = False   # wait for a "go" (or the hand gesture) before walking
+
+
+@dataclass
+class Gestures:
+    """A hand held close in front of the head, then taken away: stop / go (see gestures.py). Off by
+    default."""
+
+    enabled: bool = False
+    near: float = 0.15           # a hand: closer than this (m), on at least min_fraction of the wall-row zones
+    min_fraction: float = 0.5
+    hold_seconds: float = 0.7    # held at least this long ...
+    max_seconds: float = 4.0     # ... and at most this long (longer: a wall, or the sensor covered)
+    release_seconds: float = 0.3 # gone for this long = taken away: the gesture counts now
+
+
+@dataclass
+class Localize:
+    """Correct odometry drift against the walls seen before (see localize.py). Off by default."""
+
+    enabled: bool = False
+    every: int = 3
+    min_points: int = 12
+    min_gain_m: float = 0.02
+    min_gain_rel: float = 0.5
+    min_age: float = 20.0
+    search_step: float = 0.04
+    search_turn_deg: float = 1.5
+    max_turn_rate: float = 0.05
+    method: str = "grid"
+    icp_reach: float = 0.15
+    icp_gain: float = 0.3
+
+
+@dataclass
+class Recover:
+    """Help a robot that stays down (see recover.py). Off by default."""
+
+    enabled: bool = False
+    after_seconds: float = 6.0
+    init_seconds: float = 2.5
+    verify_seconds: float = 8.0
+    max_attempts: int = 3
+
+
+@dataclass
 class Safety:
     tof_timeout: float = 0.5
     state_timeout: float = 1.0
@@ -118,10 +216,26 @@ class Config:
     drop: Drop = field(default_factory=Drop)
     corner: Corner = field(default_factory=Corner)
     heading: Heading = field(default_factory=Heading)
+    explore: Explore = field(default_factory=Explore)
+    head: Head = field(default_factory=Head)
+    recover: Recover = field(default_factory=Recover)
+    home: Home = field(default_factory=Home)
+    localize: Localize = field(default_factory=Localize)
+    commands: Commands = field(default_factory=Commands)
+    gestures: Gestures = field(default_factory=Gestures)
     safety: Safety = field(default_factory=Safety)
     loop: Loop = field(default_factory=Loop)
 
     def validate(self) -> None:
+        # TOML accepts nan and inf, and every "<" check below is False for nan: reject them first.
+        def finite(obj, path):
+            for f in fields(obj):
+                v = getattr(obj, f.name)
+                if is_dataclass(v):
+                    finite(v, f"{path}{f.name}.")
+                elif isinstance(v, float) and not math.isfinite(v):
+                    raise ValueError(f"{path}{f.name} must be a finite number, got {v!r}")
+        finite(self, "")
         o = self.obstacle
         if not 0 <= o.first_row <= o.last_row <= 7:
             raise ValueError("obstacle: first_row/last_row must satisfy 0 <= first <= last <= 7")
@@ -133,6 +247,10 @@ class Config:
             raise ValueError("obstacle: slow_distance must be >= stop_distance")
         if o.steer_yaw_max < 0 or o.steer_slew <= 0 or o.min_turn_degrees < 0:
             raise ValueError("obstacle: steer_yaw_max >= 0, steer_slew > 0, min_turn_degrees >= 0")
+        if o.stuck_seconds < 0:
+            raise ValueError("obstacle: stuck_seconds >= 0")
+        if o.wedge_seconds < 0 or not 0 < o.wedge_ratio < 1:
+            raise ValueError("obstacle: wedge_seconds >= 0, 0 < wedge_ratio < 1")
         if o.corridor_half_width <= 0 or o.side_memory_seconds < 0:
             raise ValueError("obstacle: corridor_half_width > 0, side_memory_seconds >= 0")
         if o.low_obstacles not in ("avoid", "ignore"):
@@ -159,8 +277,51 @@ class Config:
             raise ValueError("obstacle: default_turn must be 'left' or 'right'")
         if self.motion.forward_speed < 0 or self.motion.turn_speed <= 0 or self.motion.big_turn_speed <= 0:
             raise ValueError("motion: speeds must be positive")
-        if self.loop.rate_hz <= 0:
-            raise ValueError("loop: rate_hz must be > 0")
+        e = self.explore
+        if e.cell <= 0 or e.turn_margin < 0 or e.steer_margin < 0 or e.bend_every <= 0 or e.bend_min_clear < 0:
+            raise ValueError("explore: cell > 0, turn_margin, steer_margin >= 0, bend_every > 0, bend_min_clear >= 0")
+        if not 0 <= e.max_bend_deg <= 90 or not 0 <= e.novelty_margin <= 1:
+            raise ValueError("explore: max_bend_deg in [0, 90], novelty_margin in [0, 1]")
+        hd = self.head
+        if not 0 <= hd.pitch_down_deg <= 40 or hd.pitch_after_turn < 0:
+            raise ValueError("head: pitch_down_deg in [0, 40], pitch_after_turn >= 0")
+        if not 0 <= hd.amplitude_deg <= 60 or hd.period <= 0 or hd.side_free_seconds < 0:
+            raise ValueError("head: amplitude_deg in [0, 60], period > 0, side_free_seconds >= 0")
+        hm = self.home
+        if hm.after_seconds < 0 or hm.arrive_radius <= 0 or hm.lookahead_cells < 1 or hm.replan_every <= 0 \
+                or hm.yield_seconds < 0:
+            raise ValueError("home: after_seconds >= 0, arrive_radius > 0, lookahead_cells >= 1, replan_every > 0, yield_seconds >= 0")
+        if not 10 <= hm.face_threshold_deg <= 180:
+            raise ValueError("home: face_threshold_deg in [10, 180]")
+        lz = self.localize
+        if lz.every < 1 or lz.min_points < 1 or lz.min_gain_m <= 0 or lz.min_age < 0 or lz.search_step <= 0 \
+                or lz.search_turn_deg <= 0:
+            raise ValueError("localize: every, min_points >= 1; min_gain_m > 0; min_age >= 0; search_step, search_turn_deg > 0")
+        if lz.method not in ("grid", "icp"):
+            raise ValueError("localize: method must be 'grid' or 'icp'")
+        rc = self.recover
+        if rc.after_seconds < 0 or rc.init_seconds <= 0 or rc.verify_seconds <= 0 or rc.max_attempts < 1:
+            raise ValueError("recover: after_seconds >= 0, init_seconds > 0, verify_seconds > 0, max_attempts >= 1")
+        if not 5 <= self.loop.rate_hz <= 200:
+            # robotd stops the robot ~0.5 s after the last robot.move: under 5 Hz it would stutter
+            raise ValueError("loop: rate_hz must be in [5, 200]")
+        sf = self.safety
+        if not 0 < sf.tof_timeout <= 2.0 or not 0 < sf.state_timeout <= 2.0:
+            # beyond ~2 s it would keep walking on a frame or a pose that no longer describes the room
+            raise ValueError("safety: tof_timeout and state_timeout must be in (0, 2] s")
+        if sf.health_poll <= 0 or sf.health_poll > 5.0 or sf.resume_delay < 0:
+            raise ValueError("safety: health_poll in (0, 5] s, resume_delay >= 0")
+        if not 0 < o.blind_fraction <= 1 or o.min_zones < 1 or o.max_range <= 0:
+            raise ValueError("obstacle: blind_fraction in (0, 1], min_zones >= 1, max_range > 0")
+        if o.min_turn_time < 0 or o.max_turn_time <= 0 or o.max_turn_time < o.min_turn_time or o.stop_pause < 0:
+            raise ValueError("obstacle: 0 <= min_turn_time <= max_turn_time, max_turn_time > 0, stop_pause >= 0")
+        if o.stop_distance <= 0:
+            raise ValueError("obstacle: stop_distance > 0")
+        g = self.gestures
+        if not 0.05 <= g.near <= 0.25 or not 0 < g.min_fraction <= 1 or g.hold_seconds <= 0 \
+                or g.max_seconds <= g.hold_seconds or g.release_seconds <= 0:
+            # above 0.25 m a hand is no closer than what the robot brakes for: walls would count
+            raise ValueError("gestures: near in [0.05, 0.25], min_fraction in (0, 1], 0 < hold_seconds < max_seconds, release_seconds > 0")
         if self.corner.turns_before_big_turn < 1:
             raise ValueError("corner: turns_before_big_turn must be >= 1")
 

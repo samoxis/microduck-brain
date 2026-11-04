@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 uv.lock.bak
 runs/
+first-test-*/
+first-test-*.tar.gz

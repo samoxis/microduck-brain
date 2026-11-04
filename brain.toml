@@ -28,6 +28,9 @@ last_row = 4              # they are handled separately, as low objects and drop
 corridor_half_width = 0.14 # "ahead" = any wall return within this of the robot's axis (m): the body's swept width + margin
 sensor_lateral = 0.0224   # the sensor sits this far left of the robot's axis (m; MJCF `tof` site)
 side_memory_seconds = 3.0 # remember wall returns near the body for this long: a chair leg leaves the field of view ~30 cm before passing the leg
+stuck_seconds = 0.0       # walking this long without the odometry moving 5 cm => stop and turn (0 = off; 4 is a good value)
+wedge_seconds = 0.0       # walking this long while covering less than wedge_ratio of the commanded distance => stop and turn (0 = off; 2.5 is a good value)
+wedge_ratio = 0.08        # ... catches a slow grind against a leg that still creeps a few cm, which stuck_seconds misses (the simulated gait covers ~35% of the command over 2.5 s, steering included; 0.25 fired falsely in 22 of 54 recordings)
 front_first_col = 1       # central columns used to decide whether the sensor is blind (0 = the sensor's left)
 front_last_col = 6
 min_zones = 2             # how many zones must be close for it to count (rejects single-zone noise)
@@ -80,6 +83,89 @@ kp = 2.0                  # rad/s of correction per rad of error
 ki = 0.3                  # cancels the gait's constant drift to one side
 max_correction = 0.5      # the most correction added to the turn rate (rad/s)
 yaw_sign = 1.0            # 1 = odom.yaw grows to the left (like vyaw, as the protocol states); -1 if reversed
+
+[explore]
+# Prefer directions not visited yet, remembered as grid cells in the odometry frame (explore.py).
+# Off by default: +71% area in flat 2-D worlds (tests/world2d.py), noise in the full simulator (5 + 5 runs).
+enabled = false
+cell = 0.25               # grid cell size (m)
+turn_margin = 1.5         # turning in place: pick the less visited side if both sides' free space differs by less than this (m)
+steer_margin = 0.0        # steering while walking: the same; 0 = always steer to the freer side
+bend_every = 4.0          # while walking clear, consider bending the heading this often (s)
+bend_min_clear = 0.7      # ... only if this much is clear ahead and on that side of the view (m)
+max_bend_deg = 60.0       # the largest bend of the heading towards a less visited direction (degrees)
+novelty_margin = 0.3      # bend only if that direction is this much more novel (0..1) than straight ahead
+
+[head]
+# Scan with the head while walking: the ToF sensor is on the head, so turning it left and right covers
+# what the 45° view misses beside the legs (finding 6). The walking policy is trained with head
+# commands (deltas from home, up to ±1.4 rad of yaw). Needs frames.tof in robot.state to know where the
+# head looks; without it the head stays centred. Off by default.
+scan = false
+amplitude_deg = 25.0      # how far left and right the head turns (degrees)
+period = 2.5              # one full left-right-left sweep (s)
+side_free_seconds = 3.0   # while the head looks to one side, remember how free the other side was this long
+pitch = false             # look down (head_pitch) while stopping, turning and approaching something: the
+                          # 7 cm objects under the level beams within ~45 cm come into view (finding 3)
+pitch_down_deg = 20.0     # how far down (degrees; robot.head head_pitch delta, + = down)
+pitch_after_turn = 1.5    # keep looking down this long after a stop or a turn in place (s)
+pitch_while_walking = true # false = look down only while stopping or turning in place, level as soon as it walks
+
+[home]
+# Go back to where it started, through cells it has already walked (home.py). Uses the same map as
+# [explore] (it is kept even when exploration is off). Positions are odometry: they drift.
+enabled = false
+after_seconds = 240.0     # walking time before heading home
+arrive_radius = 0.35      # home is reached within this (m)
+lookahead_cells = 3       # steer towards the path cell this many cells ahead
+face_threshold_deg = 60.0 # the way home this far off the heading: stop and turn to face it first
+replan_every = 1.0        # re-plan the path this often (s)
+yield_seconds = 4.0       # after any avoidance, stop steering for home this long: the avoidance first
+
+[localize]
+# Correct odometry drift by matching the wall rows' returns against walls seen at least min_age s
+# earlier, on a 5 cm grid (localize.py). Everything the brain remembers then uses the corrected pose.
+enabled = false
+every = 3                 # match every this many new frames
+min_points = 12           # a frame is matched only if this many of its wall returns land near walls seen before
+min_gain_m = 0.02         # apply a shift only if it brings the returns this much closer to old walls, on average (m)
+min_gain_rel = 0.5        # ... and by at least this fraction
+min_age = 20.0            # walls seen less than this long ago don't count (a frame would match itself)
+search_step = 0.04        # shifts tried: 0 and +-this (m), in x and y
+search_turn_deg = 1.5     # turns tried: 0 and +-this (degrees)
+max_turn_rate = 0.05      # frames taken while turning faster than this (rad/s) are skipped: they lag the pose
+method = "grid"           # "grid": shifts tried on a 5 cm grid; "icp": point-to-point alignment (localize.py)
+icp_reach = 0.15          # icp: a return pairs with the nearest old wall point within this (m)
+icp_gain = 0.3            # icp: fraction of the solved alignment applied each time
+
+[recover]
+# A robot that stays down (robotd gets it up after most falls, but not from lying on its side, and
+# never tries twice): after after_seconds down, stop the policy, robot.init (joints to the home pose,
+# works lying down), start the policy again, which hands it to the standing policy. See recover.py.
+enabled = false
+after_seconds = 6.0       # down (fallen or limp) this long before trying
+init_seconds = 2.5        # robot.init ramps over ~2 s: wait this long before starting the policy
+verify_seconds = 8.0      # then give the standing policy this long before trying again
+max_attempts = 3          # per fall
+
+[commands]
+# Commands from outside, over a local unix socket (only this user can open it): stop, go, home,
+# toggle. For a phone, a voice app, a script: `microduck-brain-cmd stop`. Every command received is
+# recorded, so a run with commands still replays exactly.
+enabled = false
+socket = ""               # "" = $XDG_RUNTIME_DIR/microduck-brain.sock, else /tmp/microduck-brain-<uid>.sock
+start_paused = false      # stand still until a "go" (or the hand gesture)
+
+[gestures]
+# A hand held close in front of the head (the depth sensor), then taken away: stop if walking, go if
+# stopped. Read from the depth frames alone, so it replays exactly. The robot also brakes for the
+# hand as for any obstacle.
+enabled = false
+near = 0.15               # a hand: closer than this (m) ...
+min_fraction = 0.5        # ... on at least this fraction of the wall-row zones
+hold_seconds = 0.7        # held at least this long ...
+max_seconds = 4.0         # ... and at most this long (longer: a wall, or the sensor covered)
+release_seconds = 0.3     # gone this long = taken away: the gesture counts then
 
 [safety]
 tof_timeout = 0.5         # a depth frame older than this => stop (never walk blind)
