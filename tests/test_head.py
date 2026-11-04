@@ -252,4 +252,12 @@ def test_pitch_only_while_turning_when_not_while_walking():
             log.append((b.state_name, cmd.head_pitch))
             t += 0.05
     assert any(p and p > 0 for s, p in log if s in ("brake", "turn"))
-    assert all(p == 0.0 for s, p in log if s == "forward")
+    # Walking: level, except for pitch_after_turn after a stop or turn.
+    t, last_turn, walking_down = 0.0, None, []
+    for s, p in log:
+        if s in ("brake", "turn", "bigturn"):
+            last_turn = t
+        elif s == "forward" and p and p > 0:
+            walking_down.append(t - last_turn if last_turn is not None else 1e9)
+        t += 0.05
+    assert walking_down and max(walking_down) <= cfg.head.pitch_after_turn + 0.06

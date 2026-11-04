@@ -651,8 +651,10 @@ class Brain:
             return down
         if not h.pitch_while_walking:
             # Looking down while walking hid what passes beside the legs (full simulator: a desk
-            # leg touched 4-22 times a run): only look down while standing or turning in place.
-            return 0.0
+            # leg touched 4-22 times a run): look down while standing or turning in place, and for
+            # pitch_after_turn after it -- a cube the turn ends facing comes into view only then
+            # (full simulator, cube_after_turn scene: levelling at once, it was seen in one frame).
+            return down if inputs.now - self._last_turn_at < h.pitch_after_turn else 0.0
         if inputs.now - self._last_turn_at < h.pitch_after_turn or self._close_ahead:
             return down
         return 0.0
