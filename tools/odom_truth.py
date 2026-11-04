@@ -81,11 +81,11 @@ def drifted_ticks(run: str, yaw_rate: float, scale: float):
         yield replace(t, inputs=replace(inp, pos=(ox, oy), yaw=wy))
 
 
-def corrected(run: str, ticks=None) -> list:
+def corrected(run: str, ticks=None, settings: dict | None = None) -> list:
     from microduck_brain.brain import Brain
     from microduck_brain.config import from_dict
 
-    brain = Brain(from_dict({"localize": {"enabled": True}}))
+    brain = Brain(from_dict({"localize": {"enabled": True, **(settings or {})}}))
     out = []
     for t in (ticks if ticks is not None else read(run)):
         brain.tick(t.inputs)
@@ -132,6 +132,7 @@ def main() -> int:
     ap.add_argument("truth")
     ap.add_argument("--json")
     ap.add_argument("--localize", action="store_true", help="also the odometry corrected by [localize]")
+    ap.add_argument("--settings", default="{}", help='[localize] settings for --localize, as JSON, e.g. {"method": "icp"}')
     ap.add_argument("--drift", nargs=2, type=float, metavar=("YAW_RATE", "SCALE"),
                     help="degrade the recorded odometry first (rad/s added to the heading, distance scale)")
     args = ap.parse_args()
@@ -141,11 +142,11 @@ def main() -> int:
                 if t.inputs.pos is not None and t.inputs.yaw is not None]
         res = drift(args.run, args.truth, odom)
         if args.localize:
-            res["corrected"] = drift(args.run, args.truth, corrected(args.run, ticks))
+            res["corrected"] = drift(args.run, args.truth, corrected(args.run, ticks, json.loads(args.settings)))
     else:
         res = drift(args.run, args.truth)
         if args.localize:
-            res["corrected"] = drift(args.run, args.truth, corrected(args.run))
+            res["corrected"] = drift(args.run, args.truth, corrected(args.run, None, json.loads(args.settings)))
     print(json.dumps({k: (v if k != "corrected" else {kk: vv for kk, vv in v.items() if kk != "every_10s"})
                       for k, v in res.items() if k != "every_10s"}, indent=2))
     if args.json:

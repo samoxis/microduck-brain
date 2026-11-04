@@ -150,6 +150,9 @@ class Localize:
     search_step: float = 0.04
     search_turn_deg: float = 1.5
     max_turn_rate: float = 0.05
+    method: str = "grid"
+    icp_reach: float = 0.15
+    icp_gain: float = 0.3
 
 
 @dataclass
@@ -254,6 +257,8 @@ class Config:
         if lz.every < 1 or lz.min_points < 1 or lz.min_gain_m <= 0 or lz.min_age < 0 or lz.search_step <= 0 \
                 or lz.search_turn_deg <= 0:
             raise ValueError("localize: every, min_points >= 1; min_gain_m > 0; min_age >= 0; search_step, search_turn_deg > 0")
+        if lz.method not in ("grid", "icp"):
+            raise ValueError("localize: method must be 'grid' or 'icp'")
         rc = self.recover
         if rc.after_seconds < 0 or rc.init_seconds <= 0 or rc.verify_seconds <= 0 or rc.max_attempts < 1:
             raise ValueError("recover: after_seconds >= 0, init_seconds > 0, verify_seconds > 0, max_attempts >= 1")

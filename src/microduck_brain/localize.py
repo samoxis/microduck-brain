@@ -38,6 +38,7 @@ class Localizer:
         self._frames = 0
         self.corrections = 0
         self._prev: tuple[float, float] | None = None   # (t, yaw) of the last tick, for the turn rate
+        self._pts: dict[tuple[int, int], list] = {}       # method "icp": 10 cm cell -> [(x, y, t)]
 
     # --- the correction ------------------------------------------------------------
     def correct(self, pos, yaw):
@@ -112,6 +113,9 @@ class Localizer:
         if not pts:
             return
         (px, py), cyaw = self.correct(pos, yaw)
+        if self.cfg.method == "icp":
+            self._icp(pts, pos, yaw, px, py, cyaw, now)
+            return
         if self._frames % self.cfg.every == 0:
             base, near = self._cost(pts, px, py, cyaw, now)
             if near >= self.cfg.min_points:      # enough of this frame lands near walls seen before
@@ -150,3 +154,83 @@ class Localizer:
                 m[1] += wx
                 m[2] += wy
                 m[3] += 1
+
+
+    # --- method "icp": point to point, no grid ------------------------------------------------
+    ICP_CELL = 0.10
+    ICP_REACH = 0.15          # a new return pairs with the nearest old one within this (overridable)
+    ICP_GAIN = 0.3            # fraction of the solved step applied
+    ICP_MAX_STEP = 0.015      # m per update
+    ICP_MAX_TURN = math.radians(0.5)
+
+    def _icp(self, pts, pos, yaw, px, py, cyaw, now) -> None:
+        """Pair each wall return with the nearest point seen at least min_age ago, solve the rigid
+        motion that best aligns the pairs (closed form, least squares), apply a damped, clamped
+        part of it -- if it actually lowers the pairs' mean distance -- then store the returns."""
+        cs = self.ICP_CELL
+        old = now - self.cfg.min_age
+        c, s = math.cos(cyaw), math.sin(cyaw)
+        world = [(px + c * fx - s * fy, py + s * fx + c * fy) for fx, fy in pts]
+        if self._frames % self.cfg.every == 0:
+            pairs = []
+            for wx, wy in world:
+                kx, ky = math.floor(wx / cs), math.floor(wy / cs)
+                best, bq = getattr(self.cfg, 'icp_reach', self.ICP_REACH), None
+                for i in (kx - 1, kx, kx + 1):
+                    for j in (ky - 1, ky, ky + 1):
+                        for qx, qy, t in self._pts.get((i, j), ()):
+                            if t <= old:
+                                d = math.hypot(qx - wx, qy - wy)
+                                if d < best:
+                                    best, bq = d, (qx, qy)
+                if bq is not None:
+                    pairs.append(((wx, wy), bq))
+            if len(pairs) >= self.cfg.min_points:
+                n = len(pairs)
+                mx = sum(a[0] for a, _ in pairs) / n
+                my = sum(a[1] for a, _ in pairs) / n
+                nx = sum(b[0] for _, b in pairs) / n
+                ny = sum(b[1] for _, b in pairs) / n
+                sxx = sum((a[0] - mx) * (b[0] - nx) for a, b in pairs)
+                syy = sum((a[1] - my) * (b[1] - ny) for a, b in pairs)
+                sxy = sum((a[0] - mx) * (b[1] - ny) for a, b in pairs)
+                syx = sum((a[1] - my) * (b[0] - nx) for a, b in pairs)
+                th = math.atan2(sxy - syx, sxx + syy)
+                ct, st = math.cos(th), math.sin(th)
+                tx, ty = nx - (ct * mx - st * my), ny - (st * mx + ct * my)
+
+                def cost(a_th, a_tx, a_ty):
+                    ca, sa = math.cos(a_th), math.sin(a_th)
+                    return sum(math.hypot(ca * a[0] - sa * a[1] + a_tx - b[0], sa * a[0] + ca * a[1] + a_ty - b[1])
+                               for a, b in pairs) / n
+
+                # The damped step, as a motion of the robot: rotate by g*th about the robot, then
+                # move it as the solved transform moves the robot's own position, scaled by g.
+                g = getattr(self.cfg, 'icp_gain', self.ICP_GAIN)
+                dth = max(-self.ICP_MAX_TURN, min(self.ICP_MAX_TURN, g * th))
+                rx, ry = ct * px - st * py + tx - px, st * px + ct * py + ty - py
+                mv = math.hypot(rx, ry) * g
+                if mv > self.ICP_MAX_STEP:
+                    rx, ry = rx * self.ICP_MAX_STEP / (mv / g), ry * self.ICP_MAX_STEP / (mv / g)
+                else:
+                    rx, ry = rx * g, ry * g
+                # the same small motion applied to the frame's points, to check it helps
+                cd, sd = math.cos(dth), math.sin(dth)
+                a_tx = px + rx - (cd * px - sd * py)
+                a_ty = py + ry - (sd * px + cd * py)
+                if cost(dth, a_tx, a_ty) + self.cfg.min_gain_m * 0.25 < cost(0.0, 0.0, 0.0):
+                    self.dyaw += dth
+                    c2, s2 = math.cos(self.dyaw), math.sin(self.dyaw)
+                    self.dx = px + rx - (c2 * pos[0] - s2 * pos[1])
+                    self.dy = py + ry - (s2 * pos[0] + c2 * pos[1])
+                    self.corrections += 1
+                    (px, py), cyaw = self.correct(pos, yaw)
+                    c, s = math.cos(cyaw), math.sin(cyaw)
+                    world = [(px + c * fx - s * fy, py + s * fx + c * fy) for fx, fy in pts]
+        for wx, wy in world:
+            k = (math.floor(wx / cs), math.floor(wy / cs))
+            cell = self._pts.setdefault(k, [])
+            if len(cell) < 8:
+                cell.append((wx, wy, now))
+        if len(self._pts) > MAX_CELLS:
+            self._pts.pop(next(iter(self._pts)))

@@ -132,6 +132,9 @@ min_age = 20.0            # walls seen less than this long ago don't count (a fr
 search_step = 0.04        # shifts tried: 0 and +-this (m), in x and y
 search_turn_deg = 1.5     # turns tried: 0 and +-this (degrees)
 max_turn_rate = 0.05      # frames taken while turning faster than this (rad/s) are skipped: they lag the pose
+method = "grid"           # "grid": shifts tried on a 5 cm grid; "icp": point-to-point alignment (localize.py)
+icp_reach = 0.15          # icp: a return pairs with the nearest old wall point within this (m)
+icp_gain = 0.3            # icp: fraction of the solved alignment applied each time
 
 [recover]
 # A robot that stays down (robotd gets it up after most falls, but not from lying on its side, and

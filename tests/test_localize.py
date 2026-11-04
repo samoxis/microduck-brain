@@ -75,3 +75,29 @@ def test_localize_config_validation():
     for bad in ({"every": 0}, {"min_gain_m": 0.0}, {"search_step": 0.0}):
         with pytest.raises(ValueError):
             from_dict({"localize": bad})
+
+
+def test_icp_pulls_a_wrong_pose_towards_the_walls_seen_before():
+    """method = "icp": point-to-point alignment, no grid. On the full-simulator recordings with
+    odometry degraded like a slipping robot's it lowered the mean error in 5 of 6 held-out runs
+    (-8% medium drift, -3% strong), and added 2-5 cm with good odometry."""
+    w = world2d.worlds()[0]
+    cfg = from_dict({"localize": {"enabled": True, "every": 1, "method": "icp"}})
+    loc = Localizer(cfg)
+    for a in (0.6, 1.6, 2.6, 3.6, 4.6, 5.6):
+        loc.update(w.render(2.0, 1.5, a), (2.0, 1.5), a, 0.064, 0.0)
+        loc._last_frame = None
+        loc._prev = None
+    x, y, yaw = 2.0, 1.5, 0.6
+    ox, oy = x + 0.05, y + 0.03
+    for k in range(60):
+        loc.update(w.render(x, y, yaw), (ox, oy), yaw, 0.064, 100.0 + k)
+        loc._last_frame = None
+        loc._prev = None
+    (cx, cy), _ = loc.correct((ox, oy), yaw)
+    assert loc.corrections > 0 and math.hypot(cx - x, cy - y) < math.hypot(0.05, 0.03)
+
+
+def test_localize_method_is_validated():
+    with pytest.raises(ValueError):
+        from_dict({"localize": {"method": "magic"}})
