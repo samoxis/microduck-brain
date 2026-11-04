@@ -21,6 +21,7 @@ from microduck_brain.brain import Brain, Inputs
 from microduck_brain.config import Config, from_dict
 from microduck_brain.depth import DepthFrame, Pose, floor_model, low_obstacles
 from microduck_brain.hazards import LOW
+from microduck_brain.recover import FALLEN
 
 from .lowgeo import SENSOR_X, pose_for, render
 from .test_brain import clear
@@ -327,12 +328,33 @@ def test_memory_cleared_after_a_fall():
         b.tick(Inputs(t, obstacle, True, "", 0.0, pose_for(), (0.0, 0.0)))
         t += 0.05
     assert b.hazards.remembered(LOW)
-    b.tick(Inputs(t, obstacle, False, "fallen", 0.0, pose_for(), (0.0, 0.0)))
+    b.tick(Inputs(t, obstacle, False, FALLEN, 0.0, pose_for(), (0.0, 0.0)))
     assert b.state_name == "hold" and b.hazards.remembered(LOW) == 0 and b.low_items == []
     for _ in range(40):                              # nothing new accumulates while fallen
         t += 0.05
-        b.tick(Inputs(t, obstacle, False, "fallen", 0.0, pose_for(), (0.0, 0.0)))
+        b.tick(Inputs(t, obstacle, False, FALLEN, 0.0, pose_for(), (0.0, 0.0)))
     assert b.hazards.remembered(LOW) == 0
+
+
+def test_memory_kept_through_a_hold_that_is_not_a_fall():
+    """Audit 2026-11-04: any hold (a missed health poll, a late frame) used to wipe the memory, so a
+    robot stopped before something it could no longer see walked into it after resume_delay."""
+    b = Brain(Config())
+    t = 0.0
+    obstacle = render(("cube", 0.65, 0.07))
+    while t < 2.0:
+        b.tick(Inputs(t, clear(), True, "", 0.0, pose_for(), (0.0, 0.0)))
+        t += 0.05
+    while t < 3.0:
+        b.tick(Inputs(t, obstacle, True, "", 0.0, pose_for(), (0.0, 0.0)))
+        t += 0.05
+    n = b.hazards.remembered(LOW)
+    assert n
+    for reason in ("robot.health unavailable (timed out)", "no robot.state"):
+        for _ in range(5):
+            b.tick(Inputs(t, clear(), False, reason, 0.0, pose_for(), (0.0, 0.0)))
+            t += 0.05
+        assert b.state_name == "hold" and b.hazards.remembered(LOW) == n
 
 
 def test_no_memory_without_position_but_visible_objects_still_count():

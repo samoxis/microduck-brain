@@ -121,21 +121,31 @@ class Hold(State):
     def enter(self, brain, inputs):
         self._ok_since = None
         self._stop_sent = False
+        self._fell = False
         brain.heading_integral = 0.0
-        brain.hazards.forget()   # after a fall the odometry's position can no longer be trusted
-        if inputs.safe_reason in (FALLEN, LIMP) or not (brain.cfg.home.enabled or brain.cfg.explore.enabled):
-            # The map and the way home go only after a fall; a hold for a slow control loop or a
-            # missing frame doesn't move the robot.
-            brain.explorer.forget()
-            if brain.homing.active or brain.homing.home is not None:
-                if brain.homing.active:
-                    brain.stats.home_aborted += 1
-                brain.homing.reset()
-                # Abandoned for the rest of the run: a new "home" set where it got up would be
-                # reached and reported as home (a full-simulator run did exactly that, 2.1 m off).
-                brain.homing.abandoned = True
+        if inputs.safe_reason in (FALLEN, LIMP):
+            self._after_fall(brain)
+
+    def _after_fall(self, brain):
+        """After a fall the odometry's position can no longer be trusted: the hazards, the map and
+        the way home go. A hold for a slow control loop or a missing frame doesn't move the robot,
+        so it keeps them -- above all a remembered drop it can no longer see."""
+        if self._fell:
+            return
+        self._fell = True
+        brain.hazards.forget()
+        brain.explorer.forget()
+        if brain.homing.active or brain.homing.home is not None:
+            if brain.homing.active:
+                brain.stats.home_aborted += 1
+            brain.homing.reset()
+            # Abandoned for the rest of the run: a new "home" set where it got up would be
+            # reached and reported as home (a full-simulator run did exactly that, 2.1 m off).
+            brain.homing.abandoned = True
 
     def step(self, brain, inputs):
+        if not inputs.safe and inputs.safe_reason in (FALLEN, LIMP):
+            self._after_fall(brain)          # a fall that comes during a hold started for another reason
         cmd = NONE
         if not self._stop_sent:
             self._stop_sent = True
@@ -148,7 +158,8 @@ class Hold(State):
             if self._ok_since is None:
                 self._ok_since = inputs.now
             if inputs.now - self._ok_since >= brain.cfg.safety.resume_delay:
-                return cmd, "forward"
+                # Home already reached (and no fall since): back to standing there, not exploring.
+                return cmd, ("home" if brain.homing.arrived else "forward")
         else:
             self._ok_since = None
         return cmd, None
@@ -486,6 +497,19 @@ class Face(_Rotation):
         return move(0.0, (1.0 if err > 0 else -1.0) * brain.cfg.motion.turn_speed), None
 
 
+def _sane(inputs: Inputs) -> Inputs:
+    """A NaN or infinite yaw or position is treated as missing: one NaN yaw would otherwise stay in
+    the unwrapped heading for the rest of the run (min/max clamps turn it into a constant turn), and
+    a NaN position crashes the map's cell lookup."""
+    yaw, pos = inputs.yaw, inputs.pos
+    bad_yaw = yaw is not None and not math.isfinite(yaw)
+    bad_pos = pos is not None and not (math.isfinite(pos[0]) and math.isfinite(pos[1]))
+    if not (bad_yaw or bad_pos):
+        return inputs
+    from dataclasses import replace
+    return replace(inputs, yaw=None if bad_yaw else yaw, pos=None if bad_pos else pos)
+
+
 class AtHome(State):
     """Homing: arrived. Stand still (one robot.stop), and stay."""
 
@@ -723,6 +747,7 @@ class Brain:
         self.state.enter(self, inputs)
 
     def tick(self, inputs: Inputs) -> Command:
+        inputs = _sane(inputs)
         # time accounting
         if self._last_now is not None:
             dt = max(0.0, inputs.now - self._last_now)
@@ -736,7 +761,8 @@ class Brain:
             inputs = self._localized(inputs)
         self._track_yaw(inputs.yaw)
         self.head_now = head_yaw(inputs.pose) if self.cfg.head.scan else 0.0
-        self.hazards.update(inputs.frame, inputs.pose, inputs.pos, self.yaw, inputs.safe, inputs.now)
+        self.hazards.update(inputs.frame, inputs.pose, inputs.pos, self.yaw, inputs.safe, inputs.now,
+                            fell=inputs.safe_reason in (FALLEN, LIMP))
         self._pos = inputs.pos
         hm = self.cfg.home
         if hm.enabled and inputs.safe and inputs.pos is not None and not self.homing.arrived \

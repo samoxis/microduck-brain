@@ -47,6 +47,9 @@ class Recorder:
         self._last_frame: object = None
         self._last_pose: object = None
         self._first = True
+        self._flushed_at: float | None = None
+
+    FLUSH_EVERY = 1.0   # s: at most this much is lost at a power cut, and the file stays readable
 
     def write(self, inp: Inputs, cmd: Command, state: str) -> None:
         rec: dict = {
@@ -71,6 +74,9 @@ class Recorder:
             self._last_pose = inp.pose
         self._first = False
         self._fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+        if self._flushed_at is None or inp.now - self._flushed_at >= self.FLUSH_EVERY:
+            self._flushed_at = inp.now
+            self._fh.flush()       # gzip: a sync flush, so everything up to here decompresses
 
     def close(self) -> None:
         if not self._fh.closed:
@@ -84,6 +90,17 @@ class Tick:
     state: str
 
 
+def _next_line(lines) -> str | None:
+    """The next line, or None at the end -- also the end of a gzip stream that was cut off (a run
+    stopped by a power cut: everything up to the last flush is still there)."""
+    try:
+        return next(lines)
+    except StopIteration:
+        return None
+    except (EOFError, gzip.BadGzipFile):
+        return None
+
+
 def read(path: str | Path) -> Iterator[Tick]:
     """The recorded ticks, with frames and poses restored."""
     frame: DepthFrame | None = None
@@ -92,10 +109,20 @@ def read(path: str | Path) -> Iterator[Tick]:
         header = json.loads(fh.readline())
         if header.get("kind") != HEADER["kind"] or header.get("format") != FORMAT:
             raise ValueError(f"{path}: not a microduck-brain recording (format {FORMAT})")
-        for line in fh:
+        lines = iter(fh)
+        line = _next_line(lines)
+        while line is not None:
+            nxt = _next_line(lines)
             if not line.strip():
+                line = nxt
                 continue
-            r = json.loads(line)
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                if nxt is None:
+                    return            # the half-written last line of a run that was cut off
+                raise
+            line = nxt
             if "f" in r:
                 f = r["f"]
                 frame = None if f is None else DepthFrame(8, 8, tuple(f["d"]), tuple(f["s"]))

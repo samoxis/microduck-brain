@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import tomllib
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
@@ -200,6 +202,15 @@ class Config:
     loop: Loop = field(default_factory=Loop)
 
     def validate(self) -> None:
+        # TOML accepts nan and inf, and every "<" check below is False for nan: reject them first.
+        def finite(obj, path):
+            for f in fields(obj):
+                v = getattr(obj, f.name)
+                if is_dataclass(v):
+                    finite(v, f"{path}{f.name}.")
+                elif isinstance(v, float) and not math.isfinite(v):
+                    raise ValueError(f"{path}{f.name} must be a finite number, got {v!r}")
+        finite(self, "")
         o = self.obstacle
         if not 0 <= o.first_row <= o.last_row <= 7:
             raise ValueError("obstacle: first_row/last_row must satisfy 0 <= first <= last <= 7")
@@ -266,8 +277,21 @@ class Config:
         rc = self.recover
         if rc.after_seconds < 0 or rc.init_seconds <= 0 or rc.verify_seconds <= 0 or rc.max_attempts < 1:
             raise ValueError("recover: after_seconds >= 0, init_seconds > 0, verify_seconds > 0, max_attempts >= 1")
-        if self.loop.rate_hz <= 0:
-            raise ValueError("loop: rate_hz must be > 0")
+        if not 5 <= self.loop.rate_hz <= 200:
+            # robotd stops the robot ~0.5 s after the last robot.move: under 5 Hz it would stutter
+            raise ValueError("loop: rate_hz must be in [5, 200]")
+        sf = self.safety
+        if not 0 < sf.tof_timeout <= 2.0 or not 0 < sf.state_timeout <= 2.0:
+            # beyond ~2 s it would keep walking on a frame or a pose that no longer describes the room
+            raise ValueError("safety: tof_timeout and state_timeout must be in (0, 2] s")
+        if sf.health_poll <= 0 or sf.health_poll > 5.0 or sf.resume_delay < 0:
+            raise ValueError("safety: health_poll in (0, 5] s, resume_delay >= 0")
+        if not 0 < o.blind_fraction <= 1 or o.min_zones < 1 or o.max_range <= 0:
+            raise ValueError("obstacle: blind_fraction in (0, 1], min_zones >= 1, max_range > 0")
+        if o.min_turn_time < 0 or o.max_turn_time <= 0 or o.max_turn_time < o.min_turn_time or o.stop_pause < 0:
+            raise ValueError("obstacle: 0 <= min_turn_time <= max_turn_time, max_turn_time > 0, stop_pause >= 0")
+        if o.stop_distance <= 0:
+            raise ValueError("obstacle: stop_distance > 0")
         if self.corner.turns_before_big_turn < 1:
             raise ValueError("corner: turns_before_big_turn must be >= 1")
 

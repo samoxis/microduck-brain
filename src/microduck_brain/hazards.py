@@ -153,10 +153,19 @@ class HazardMap:
 
     # --- per tick -----------------------------------------------------------------
     def update(self, frame: DepthFrame | None, pose: Pose | None, pos, yaw: float | None,
-               safe: bool, now: float) -> list[Hazard]:
+               safe: bool, now: float, fell: bool = True) -> list[Hazard]:
+        """``fell``: the reason it is not safe is a fall (or limp). Only then is the memory wiped:
+        after a missed health poll or a late frame the robot hasn't moved, and a hole it stopped
+        for but no longer sees must still be there when it walks again."""
         self.items = []
         if not safe:
-            self.forget()
+            if fell:
+                self.forget()
+            else:
+                for k in self._kinds.values():
+                    k.first = None
+                    k.found = []
+                self._last_frame = None     # look at the current frame afresh once it is safe again
             return self.items
         sx = pose.sensor_pos[0] if pose else self.cfg.low.nominal_sensor_forward
         can_remember = pos is not None and yaw is not None
@@ -199,6 +208,8 @@ class HazardMap:
                     self.stats.drops_seen += new
 
             if memory <= 0:
+                if not can_remember and self._memory_seconds(kind) > 0:
+                    continue        # no pose this tick: keep the points (they still age), use none
                 k.points.clear()
                 continue
             c, s = math.cos(yaw), math.sin(yaw)

@@ -18,6 +18,14 @@ from .ipc import Link, RpcError, Stream
 log = logging.getLogger("microduck_brain")
 
 
+def _finite(v) -> float | None:
+    """A number from robot.state, or None: null (serde_json's NaN), a string, inf or nan."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    v = float(v)
+    return v if math.isfinite(v) else None
+
+
 def default_sockets(cfg: Config) -> tuple[str, str]:
     """Socket paths: from the config, else the simulator's if present, else the real robot's."""
     robot, tof = cfg.sockets.robot, cfg.sockets.tof
@@ -56,6 +64,7 @@ class Runner:
         self._healthy = False
         self._health_reason = "not asked yet"
         self._health_at = -1e9
+        self._warned_shape = False
         self.tof = Stream(tof_sock, "tof.stream", None, self._on_tof, self.stop_event)
         self.state = Stream(robot_sock, "robot.subscribe", {"hz": 25}, self._on_state, self.stop_event)
 
@@ -66,6 +75,13 @@ class Runner:
         try:
             frame = DepthFrame.from_params(params)
         except (KeyError, ValueError, TypeError):
+            return
+        if (frame.rows, frame.cols) != (8, 8):
+            # The VL53L5CX can also run 4x4; the brain's geometry is 8x8 only. Dropped frames read
+            # as "no depth" (a hold), instead of an exception that ends the run.
+            if not self._warned_shape:
+                self._warned_shape = True
+                log.warning("tof.frame is %dx%d; only 8x8 frames are used", frame.rows, frame.cols)
             return
         with self._lock:
             self._frame, self._frame_at = frame, self.clock()
@@ -79,10 +95,12 @@ class Runner:
         with self._lock:
             self._fallen = bool(safety.get("fallen", False))
             self._limp = bool(safety.get("limp", False))
-            yaw = (params.get("odom") or {}).get("yaw")
-            self._yaw = float(yaw) if isinstance(yaw, (int, float)) else None
-            position = (params.get("odom") or {}).get("position")
-            self._pos = (float(position[0]), float(position[1])) if isinstance(position, list) and len(position) >= 2 else None
+            odom = params.get("odom") or {}
+            odom = odom if isinstance(odom, dict) else {}
+            self._yaw = _finite(odom.get("yaw"))
+            position = odom.get("position")
+            x, y = (_finite(position[0]), _finite(position[1])) if isinstance(position, list) and len(position) >= 2 else (None, None)
+            self._pos = (x, y) if x is not None and y is not None else None
             t_ns = params.get("t_ns")
             self._poses.append((int(t_ns) if isinstance(t_ns, int) else 0, Pose.from_state(params)))
             self._state_at = self.clock()
@@ -224,8 +242,10 @@ class Runner:
                     )
                 self.stop_event.wait(max(0.0, period - (self.clock() - t0)))
         finally:
-            self.send_stop()
-            self.stop_event.set()
-            self.link.close()
-            if self.recorder is not None:
-                self.recorder.close()
+            try:
+                self.send_stop()
+            finally:
+                self.stop_event.set()
+                self.link.close()
+                if self.recorder is not None:
+                    self.recorder.close()
