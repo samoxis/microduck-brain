@@ -4,42 +4,64 @@
 
 ![Microduck biped walking in simulation](docs/microduck_walk.gif)
 
-An autonomy layer for **Microduck**, the 25 cm open-source biped from Pollen Robotics / Hugging Face.
-It runs as a separate client and talks to the robot only through its public JSON-RPC API over unix
-sockets — the same calls `robotctl` makes — so it needs no changes to the robot's software.
-Python 3.12, standard library only.
+**A brain for Microduck**, the 25 cm open-source walking duck robot from Pollen Robotics and Hugging
+Face. Out of the box the duck walks where you steer it. With microduck-brain it walks **on its own**:
+it looks with its depth sensor, goes around furniture, toys and stairs, and stops when something
+is wrong.
 
-What the robot does with it:
+> **Status:** tested in Pollen's full simulator (the real robot software and walking policies, in
+> a simulated apartment), not yet on a physical duck. **Have a Microduck?** The guided test takes
+> 5 minutes, sends the duck nothing until the sensors check out, and packs the results into one file
+> to send back: `bash tools/first_test.sh` (see [Quick start](#quick-start)).
 
-- **walks and holds its heading**, cancelling the gait's drift with `odom.yaw` (a small PI loop);
-- **steers around obstacles while walking**, and stops to turn in place only when there is no room;
-- **avoids low objects** (7 cm cubes, 8 cm balls) that are only visible in the bottom rows of its
-  8×8 depth sensor, using a geometric model of the floor;
-- **keeps away from drops** (ledges, stairs going down);
-- **remembers hazards it can no longer see**, in odometry coordinates;
-- **stops sending walking commands when it falls or is unhealthy**, and resumes once it is upright;
-- **records every decision** for exact offline replay and plots;
-- has an **observe mode** for a first run on a physical robot: it decides and records, but sends the
-  robot nothing, and [`tools/first_robot_check.py`](tools/first_robot_check.py) checks that
-  recording before the robot is allowed to walk.
+## What it does, in plain words
 
-Optional, all off by default (each measured below; none tried on a physical robot yet):
+- **Walks straight and steers around things.** It starts steering early, harder the closer it
+  gets, and only stops to turn on the spot when there is no room.
+- **Sees small things on the floor**, like a 7 cm cube or a ball, and **keeps away from stairs and
+  ledges**. It remembers them after they leave its view (they do, close up: the sensor looks ahead).
+- **Stops by itself when it falls or something is wrong** (a failing sensor, a slow control loop),
+  and only walks again once everything has been fine for a moment.
+- **Records everything it decides**, so any run can be replayed exactly, plotted and compared.
 
-- **explore** (`[explore]`): prefer directions it has not been to yet — noise in the full simulator;
-- **head scan** (`[head] scan`): turn the head left and right while walking — noise in the full simulator;
-- **head pitch** (`[head] pitch`, `pitch_while_walking = false`): look down while stopping and
-  turning, so close 7 cm cubes stay visible — 0 of 5 cube hits vs 4 of 5, more area;
-- **get up when stuck on its side** (`[recover]`): 5 of 5 in the simulator;
-- **go home** (`[home]`): back to where it started — 3 of 3 in the last full-simulator series;
-- **stuck and wedge detectors** (`[obstacle] stuck_seconds`, `wedge_seconds`): walking without
-  getting anywhere => stop and turn away;
-- **odometry correction** (`[localize]`): small gain, only when the odometry drifts;
-- **commands** (`[commands]`): stop / go / home / toggle over a local socket, for a phone, a voice
-  app or a script (`microduck-brain-cmd stop`) — in the full simulator it stood still within 1 mm
-  for the 20 s between a stop and a go;
-- **hand gesture** (`[gestures]`): a hand held close in front of the head, then taken away, stops a
-  walking robot or starts a stopped one — 0 false gestures in 8.6 h of simulator recordings; not
-  yet tried with a real hand.
+Optional, each one switched on in [`brain.toml`](brain.toml) and **off by default** until it has
+been measured:
+
+- **Look down while turning**, so small things right in front stay visible.
+- **Get up when stuck on its side** after a fall.
+- **Go back home**, to where it started.
+- **Notice when it is stuck** (walking but not getting anywhere) and turn away.
+- **Take commands**: stop, go, go home — from a phone app, a voice assistant or a script.
+- **Understand a hand gesture**: hold your hand close in front of its head, then take it away, to
+  stop it or start it again.
+- **Explore**: prefer places it has not been yet. **Scan with its head** while walking.
+  **Correct its position** against walls it has seen. (These three measured no clear gain yet.)
+
+## Features, for the technical reader
+
+It runs as a separate process and talks to the robot only through its public JSON-RPC API over unix
+sockets (the same calls `robotctl` makes), so it needs no changes to the robot's software. Python
+3.12, standard library only. `Brain.tick(inputs) -> command` is a pure state machine (hold, forward,
+brake, turn, bigturn, face, home, paused): every run is recorded and replays bit for bit.
+
+| Feature | Setting | Default | Measured (simulator unless said) |
+|---|---|---|---|
+| Heading hold (PI on `odom.yaw`), steering while walking, stop + turn in place | `[heading]`, `[obstacle]` | on | 0 falls; 132 avoidances in 300 s, 15 needing a stop |
+| Low objects in the bottom rows (floor model from the sensor pose) | `[low]` | on | cubes and balls seen from 0.45–0.7 m with the head level |
+| Drops and stairs (the floor missing where it should be) | `[drop]` | on | the apartment's stairwell found and avoided |
+| Hazard memory (odometry frame), kept through holds, wiped after a fall | `[low]`, `[drop]`, `[obstacle]` | on | — |
+| Safety hold: fallen, limp, unhealthy, no frames or state | `[safety]` | on | no walking command while unsafe (tests) |
+| Look down while stopping and turning | `[head] pitch`, `pitch_while_walking = false` | off | cube hits 4/5 → 0/5; area 6.83 → 8.96 m² |
+| Get up when stuck on its side | `[recover]` | off | 5 of 5 stuck robots up |
+| Go home through walked cells | `[home]` | off | 3 of 3 home, 0.18–0.34 m from the true start |
+| Stuck / wedged (walking without moving) | `[obstacle] stuck_seconds`, `wedge_seconds` | off | wedge: both desk-leg grinds caught, 0 false in 54 runs (replayed) |
+| Commands over a local socket (stop, go, home, toggle) | `[commands]` | off | still within 1 mm while paused, true pose |
+| Hand gesture: held close 0.7–4 s, then taken away | `[gestures]` | off | 0 false in 8.6 h of recordings; no real hand yet |
+| Explore, head scan, odometry correction | `[explore]`, `[head] scan`, `[localize]` | off | noise in the full simulator |
+| Observe mode + sensor check before walking | `--observe`, `tools/first_robot_check.py` | — | all checks pass on simulator recordings |
+| Guided first test on a real duck | `tools/first_test.sh` | — | run end to end in the simulator |
+
+Every number has its table or recording below; what was not verified is said next to it.
 
 ![A 300 s run in the full simulator, apartment scene](docs/full-sim-run.svg)
 
@@ -316,6 +338,23 @@ uv run python tools/first_robot_check.py first.jsonl.gz
 
 On a 600 s full-simulator recording every check passes (14.6 Hz, 100% valid zones, tilt 2.8°,
 trunk 0.120 m, 0 differing); the thresholds are not yet checked against a physical robot.
+
+**Commands and the hand gesture.** With `[commands] enabled = true` the brain listens on a local
+socket that only your user can open, and anything that can write a line of JSON to it can drive the
+duck — a phone app, a voice assistant, a script:
+
+```bash
+uv run microduck-brain-cmd stop        # stand still until "go"
+uv run microduck-brain-cmd go
+uv run microduck-brain-cmd home        # back to the start (needs [home] enabled = true)
+uv run microduck-brain-cmd status      # what it is doing, as JSON
+```
+
+The wire format is one JSON-RPC line, `{"jsonrpc":"2.0","id":1,"method":"brain.command","params":{"name":"stop"}}`
+(see [`commands.py`](src/microduck_brain/commands.py)). With `[gestures] enabled = true`, hold a
+hand about 10 cm in front of its head for one to four seconds, then take it away: a walking duck
+stops, a stopped one walks on. Commands and gestures are recorded like everything else, so the run
+still replays exactly. The safety hold always wins: no command makes it walk while it is not safe.
 
 Sockets are found automatically (the simulator's under `~/.cache/duck-sim/`, else the robot's under
 `/run/`); `--robot-socket` / `--tof-socket` override them. Every parameter is documented in
