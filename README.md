@@ -60,7 +60,7 @@ from the robot's own odometry. The recording is in [`docs/`](docs/) and replays 
 | Same 3 recordings, replayed with `[localize]` on (`tools/odom_truth.py --localize`) | Does matching walls against the map correct it? | First version: **no, worse** (final 0.23–0.71 m). Two causes traced: distances to cell *centres* rewarded snapping points to the grid, and frames taken while turning lag the pose by up to a frame (≈3° at 0.77 rad/s). Fixed (mean wall point per cell; frames above 0.05 rad/s skipped). Now, on 6 other full-simulator runs: still **worse**, by less (raw 0.01–0.10 m, corrected 0.04–0.27 m). 2-D, fresh seeds: perfect odometry stays perfect (0.00–0.01 m), medium drift halved (0.34 → 0.17, 0.44 → 0.23 m), strong drift a little (0.82 → 0.65, 0.92 → 0.85 m). It helps where drift is large; the simulator's odometry is too good to need it. Then stricter (a shift must win by 2 cm and 50%), tuned on 3 recordings: on the 6 others, **noise** — 2 better, 1 the same, 3 worse, mean final error 0.04 m raw vs 0.06 m corrected (it had been up to 0.71 m); 2-D: perfect odometry stays 0.00 m, medium drift down ~25% (0.37 → 0.27, 0.47 → 0.35 m). Last test, the drift the simulator lacks: the 9 recordings' odometry degraded like a slipping robot's (`tools/odom_truth.py --drift`: heading +0.0009 rad/s and distances ×1.02, or +0.002 and ×1.03), corrected on the real frames, compared with the true pose: **no improvement** — mean error drifted vs corrected within ±10% each way (e.g. 0.52 → 0.53, 0.45 → 0.44 m medium; 1.16 → 1.12, 0.99 → 1.06 m strong). The 2-D gain doesn't carry over to real frames: strict, it rarely acts; loose, its matches are wrong. Then a second method, `method = "icp"`: each return paired with the nearest wall point seen ≥ 20 s earlier (within 15 cm), the rigid motion aligning the pairs solved in closed form, 30% of it applied (≤ 1.5 cm, ≤ 0.5° a step) if it lowers their mean distance. Tuned on 3 recordings, held out 6: **medium drift lower in 5 of 6 runs** (mean 0.38 → 0.36 m, −8%), **strong drift lower in 5 of 6** (−3%), but **+2–5 cm with good odometry**. A small, consistent gain under drift, a small cost without it. **Off**; if odometry on the real robot drifts, `method = "icp"` is the one to try |
 | Full simulator, all 54 archived recordings replayed, plus a scene built for the case ([`tools/desk_leg_trials.sh`](tools/desk_leg_trials.sh)) | Wedge detector (`[obstacle] wedge_seconds = 2.5`): walking but covering under 8% of the commanded distance | The case: grinding against a desk leg, 5 cm in 3.6 s, until it fell (120 and 435 contacts in two runs); the stuck detector missed it because each 5 cm of creep reset it. Replayed: **catches both, 0 false firings in 54 runs** (2.4 s after the first contact, 4.9 s before the fall). A 25% threshold fired falsely in 22 runs: the simulated gait covers only ~35% of the command. In 6 runs started 6–11 s before the spot the long wedge did not recur (brushes only, 0 falls), so **its effect closed-loop is not measured**. Opt-in, off ([`docs/ab/desk-leg-wedge.txt`](docs/ab/desk-leg-wedge.txt)) |
 | Full simulator, cloud container, `MEASURE=1`, 3 + 3 runs of 600 s alternating, commit `5f11209` | Profile "autonomy" vs. defaults: recover, head pitch only while turning, stuck 4 s, wedge 2.5 s (`AB_SET` in `tools/ab_full_sim.sh`) | **Noise** on all metrics but one: area 7.08 → 7.85 m², toy contacts 34 ± 55 → 0 (one level-head run walked into a cube for 10 s, finding 3), furniture 0 → 1.7 ± 2.9 (one 1 s brush on the desk leg, braked at once); avoids/min after a turn in place 30.4 → 25.9, separated. 0 falls either way (all holds were the container's slow loop), so recovery, stuck and wedge never fired. No cost seen; not the default ([`docs/ab/autonomy-5f11209.txt`](docs/ab/autonomy-5f11209.txt)) |
-| Test suite | 245 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
+| Test suite | 247 tests: synthetic and recorded frames, closed-loop worlds, a fake robot on real sockets, replay determinism | all passing, see the badge |
 
 **What has not been verified**: anything on a physical robot (the author doesn't have one yet). In
 the full-simulator run, contacts with furniture are not measured (the headless simulator doesn't report
@@ -276,7 +276,17 @@ uv run python -m tests.world2d --seconds 300            # coverage benchmark, ex
 ```
 
 On a physical robot, start with `--observe` (carried by hand or on a stand): nothing is sent to
-the robot, and the recording shows what the brain would have done.
+the robot, and the recording shows what the brain would have done. Then check the recording before
+letting it walk: frame rate, valid zones, dead zones, sensor pose, tilt, trunk height, odometry and
+exact replay, each PASS / WARN / FAIL with its number (exit code 1 on any FAIL):
+
+```bash
+uv run microduck-brain --observe --duration 60 --record first.jsonl.gz
+uv run python tools/first_robot_check.py first.jsonl.gz
+```
+
+On a 600 s full-simulator recording every check passes (14.6 Hz, 100% valid zones, tilt 2.8°,
+trunk 0.120 m, 0 differing); the thresholds are not yet checked against a physical robot.
 
 Sockets are found automatically (the simulator's under `~/.cache/duck-sim/`, else the robot's under
 `/run/`); `--robot-socket` / `--tof-socket` override them. Every parameter is documented in
