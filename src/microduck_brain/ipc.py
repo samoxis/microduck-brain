@@ -92,15 +92,20 @@ class Link:
                 if not line:
                     raise OSError("connection closed by the robot")
                 msg = json.loads(line)
-                if msg.get("id") != id_:
-                    continue  # notifications or stale responses
+                if not isinstance(msg, dict) or msg.get("id") != id_:
+                    continue  # notifications, stale responses, or not an object
                 if "error" in msg and msg["error"]:
                     raise RpcError(f"{method}: {msg['error']}")
                 return msg.get("result") or {}
             raise OSError(f"{method}: no response within {self.timeout}s")
-        except (OSError, json.JSONDecodeError):
+        except OSError:
             self.close()
             raise
+        except (ValueError, UnicodeDecodeError) as e:
+            # A garbled reply is a broken link like any other: callers handle OSError (JSONDecodeError
+            # escaping used to crash the main loop, and skip closing the recording).
+            self.close()
+            raise OSError(f"{method}: malformed reply ({e})") from e
 
 
 class Stream(threading.Thread):
@@ -172,7 +177,12 @@ class Stream(threading.Thread):
                         self.connected = True
                         continue
                     method = msg.get("method")
-                    if method and msg.get("params") is not None:
-                        self.on_message(method, msg["params"])
+                    params = msg.get("params")
+                    if method and isinstance(params, dict):
+                        try:
+                            self.on_message(method, params)
+                        except Exception as e:  # noqa: BLE001 -- one bad message must not end the stream
+                            log.warning("%s: ignored a malformed %s message (%s: %s)",
+                                        self.subscribe, method, type(e).__name__, e)
         finally:
             s.close()

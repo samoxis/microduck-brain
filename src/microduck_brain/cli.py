@@ -47,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--tof-socket", help="tofd's socket (overrides the config)")
     ap.add_argument("--duration", type=float, default=0.0, help="stop by itself after this many seconds (0 = until Ctrl+C)")
     ap.add_argument("--record", help="write every tick to this file (.jsonl, or .jsonl.gz) for replay and plotting")
+    ap.add_argument("--observe", action="store_true",
+                    help="decide and record, but send the robot nothing (first runs on a physical robot)")
     ap.add_argument("--verbose", "-v", action="store_true")
     args = ap.parse_args(argv)
 
@@ -72,10 +74,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.record:
         from .record import Recorder
 
-        recorder = Recorder(args.record, {"config": path, "started": time.strftime("%Y-%m-%dT%H:%M:%S")})
+        recorder = Recorder(args.record, {"config": path, "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                          "observe": args.observe})
         logging.info("recording to %s", args.record)
 
-    runner = Runner(cfg, robot, tof, recorder=recorder)
+    runner = Runner(cfg, robot, tof, recorder=recorder, observe=args.observe)
+    if args.observe:
+        logging.info("OBSERVE mode: no commands will be sent to the robot")
 
     def _stop(signum, frame):  # Ctrl+C and SIGTERM => clean stop
         runner.stop_event.set()
@@ -106,8 +111,46 @@ def summary(st, duration: float) -> dict:
         "holds_fall_or_unhealthy": st.holds_unsafe,
         "holds_no_depth": st.holds_no_depth,
         "walking_forward_s": round(st.forward_seconds, 1),
+        "commands": st.commands,
+        "gestures": st.gestures,
+        "exploration_bends": st.bends,
+        "exploration_bends_completed": st.bends_completed,
+        "exploration_bends_interrupted": st.bends_interrupted,
+        "exploration_bends_aborted": st.bends_aborted,
+        "exploration_bends_refused": st.bends_refused,
+        "exploration_side_choices": st.novel_turns,
         "seconds_per_state": {k: round(v, 1) for k, v in st.state_seconds.items()},
     }
+
+
+def cmd_main(argv: list[str] | None = None) -> int:
+    from .commands import NAMES, default_socket, send
+
+    ap = argparse.ArgumentParser(
+        prog="microduck-brain-cmd",
+        description="Send a command to a running microduck-brain ([commands] enabled = true).",
+    )
+    ap.add_argument("name", choices=(*NAMES, "status"))
+    ap.add_argument("--config", "-c", help="TOML file (default: ./brain.toml if present), for the socket path")
+    ap.add_argument("--socket", help="the brain's command socket (overrides the config)")
+    args = ap.parse_args(argv)
+    try:
+        cfg, _ = _load_config(args.config)
+    except (OSError, ValueError) as e:
+        print(f"invalid configuration: {e}", file=sys.stderr)
+        return 2
+    path = args.socket or default_socket(cfg.commands.socket)
+    try:
+        if args.name == "status":
+            res = send(path, "brain.status")
+        else:
+            res = send(path, "brain.command", {"name": args.name})
+    except (OSError, RuntimeError, ValueError) as e:
+        print(f"no answer from the brain at {path}: {e} (is it running, with [commands] enabled = true?)",
+              file=sys.stderr)
+        return 1
+    print(json.dumps(res, indent=2))
+    return 0
 
 
 def replay_main(argv: list[str] | None = None) -> int:

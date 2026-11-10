@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One full-simulator run of microduck-brain, recorded, for the README's "verified" column.
+# One full-simulator run of microduck-brain, recorded, replayed and plotted (the README's Results).
 #
 # What it does:
 #   1. starts Pollen's simulator headless in the apartment scene (scripts/duck-sim), unless one is
@@ -14,8 +14,11 @@
 #
 #   bash tools/full_sim_run.sh            # 300 s
 #   SECONDS_TO_RUN=600 bash tools/full_sim_run.sh
+#   BRAIN_CONFIG=/path/to/other.toml RUN_LABEL=on bash tools/full_sim_run.sh   # another config, labelled dir
+#   MEASURE=1 bash tools/full_sim_run.sh     # also log contacts and the true trunk pose (a new simulator only)
 #
-# Output: runs/<timestamp>/ with run.jsonl.gz, run.svg, summary.json, brain.log, sim.txt
+# Output: runs/<timestamp>[-<label>]/ with run.jsonl.gz, run.svg, summary.json, brain.log, sim.txt, and
+# brain.toml (the config the run used; the replay and the plot use it too)
 set -euo pipefail
 
 MICRODUCK="${MICRODUCK:-$HOME/microduck}"
@@ -26,9 +29,19 @@ export DUCK_SIM_VIEWER="${DUCK_SIM_VIEWER:-0}"
 RUN_SECONDS="${SECONDS_TO_RUN:-300}"
 
 BRAIN="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="$BRAIN/runs/$(date +%Y%m%d-%H%M%S)"
+CONFIG="${BRAIN_CONFIG:-$BRAIN/brain.toml}"
+OUT="$BRAIN/runs/$(date +%Y%m%d-%H%M%S)${RUN_LABEL:+-$RUN_LABEL}"
 SIM="$MICRODUCK/scripts/duck-sim"
 mkdir -p "$OUT"
+[ -f "$CONFIG" ] || { echo "ERROR: no config $CONFIG" >&2; exit 1; }
+cp "$CONFIG" "$OUT/brain.toml"
+if [ "${MEASURE:-0}" = 1 ]; then
+    # tools/push/sitecustomize.py, loaded into the simulator's Python: contacts with anything but the
+    # floor, and where the trunk really is. Only takes effect if this script starts the simulator.
+    export PYTHONPATH="$BRAIN/tools/push${PYTHONPATH:+:$PYTHONPATH}"
+    export DUCK_CONTACT_FILE="$OUT/contacts.txt" DUCK_TRUTH_FILE="$OUT/truth.txt"
+    : > "$OUT/contacts.txt"; : > "$OUT/truth.txt"
+fi
 
 say() { printf '\n== %s\n' "$*"; }
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -75,13 +88,17 @@ fi
 say "running the brain for $RUN_SECONDS s (Ctrl+C stops it cleanly)"
 cd "$BRAIN"
 # no pipe here: Ctrl+C must stop only the brain (it sends robot.stop), not the rest of this script
-uv run microduck-brain --duration "$RUN_SECONDS" --record "$OUT/run.jsonl.gz" \
+uv run microduck-brain -c "$OUT/brain.toml" --duration "$RUN_SECONDS" --record "$OUT/run.jsonl.gz" \
     > "$OUT/brain-summary.json" 2> "$OUT/brain.log" || true
 [ -s "$OUT/run.jsonl.gz" ] || die "the brain wrote no recording — see $OUT/brain.log"
 
 say "replaying the recording (must match exactly) and drawing the path"
-uv run microduck-brain-replay "$OUT/run.jsonl.gz" > "$OUT/summary.json"
-uv run microduck-brain-plot "$OUT/run.jsonl.gz" -o "$OUT/run.svg" \
+uv run microduck-brain-replay -c "$OUT/brain.toml" "$OUT/run.jsonl.gz" > "$OUT/summary.json"
+uv run python tools/explore_report.py -c "$OUT/brain.toml" "$OUT/run.jsonl.gz" > "$OUT/explore_report.json"
+if [ -s "$OUT/truth.txt" ]; then
+    uv run python tools/odom_truth.py "$OUT/run.jsonl.gz" "$OUT/truth.txt" --json "$OUT/odom_truth.json" > /dev/null || true
+fi
+uv run microduck-brain-plot -c "$OUT/brain.toml" "$OUT/run.jsonl.gz" -o "$OUT/run.svg" \
     --title "Full simulator, official walking policies, apartment ($RUN_SECONDS s)" >/dev/null
 
 python3 - "$OUT/summary.json" <<'PY'

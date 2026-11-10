@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
@@ -15,6 +16,14 @@ from .depth import DepthFrame, Pose
 from .ipc import Link, RpcError, Stream
 
 log = logging.getLogger("microduck_brain")
+
+
+def _finite(v) -> float | None:
+    """A number from robot.state, or None: null (serde_json's NaN), a string, inf or nan."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    v = float(v)
+    return v if math.isfinite(v) else None
 
 
 def default_sockets(cfg: Config) -> tuple[str, str]:
@@ -31,8 +40,12 @@ def default_sockets(cfg: Config) -> tuple[str, str]:
 
 class Runner:
     def __init__(self, cfg: Config, robot_sock: str, tof_sock: str, clock=time.monotonic,
-                 recorder=None) -> None:
+                 recorder=None, observe: bool = False) -> None:
         self.cfg = cfg
+        # Observe: read the sensors, decide and record as usual, but send the robot NOTHING (no
+        # robot.move, no robot.stop). For a first run on a physical robot: carried by hand or on a
+        # stand, its recording shows what the brain would have done, and replays exactly.
+        self.observe = observe
         self.brain = Brain(cfg)
         self.clock = clock
         self.recorder = recorder          # optional: record.Recorder, one line per tick
@@ -51,8 +64,15 @@ class Runner:
         self._healthy = False
         self._health_reason = "not asked yet"
         self._health_at = -1e9
+        self._warned_shape = False
         self.tof = Stream(tof_sock, "tof.stream", None, self._on_tof, self.stop_event)
         self.state = Stream(robot_sock, "robot.subscribe", {"hz": 25}, self._on_state, self.stop_event)
+        self.commands = None
+        self._status: dict = {}
+        if cfg.commands.enabled:
+            from .commands import CommandServer, default_socket
+
+            self.commands = CommandServer(default_socket(cfg.commands.socket), self.stop_event, self.status)
 
     # --- streams ---------------------------------------------------------------
     def _on_tof(self, method: str, params: dict) -> None:
@@ -61,6 +81,13 @@ class Runner:
         try:
             frame = DepthFrame.from_params(params)
         except (KeyError, ValueError, TypeError):
+            return
+        if (frame.rows, frame.cols) != (8, 8):
+            # The VL53L5CX can also run 4x4; the brain's geometry is 8x8 only. Dropped frames read
+            # as "no depth" (a hold), instead of an exception that ends the run.
+            if not self._warned_shape:
+                self._warned_shape = True
+                log.warning("tof.frame is %dx%d; only 8x8 frames are used", frame.rows, frame.cols)
             return
         with self._lock:
             self._frame, self._frame_at = frame, self.clock()
@@ -74,10 +101,12 @@ class Runner:
         with self._lock:
             self._fallen = bool(safety.get("fallen", False))
             self._limp = bool(safety.get("limp", False))
-            yaw = (params.get("odom") or {}).get("yaw")
-            self._yaw = float(yaw) if isinstance(yaw, (int, float)) else None
-            position = (params.get("odom") or {}).get("position")
-            self._pos = (float(position[0]), float(position[1])) if isinstance(position, list) and len(position) >= 2 else None
+            odom = params.get("odom") or {}
+            odom = odom if isinstance(odom, dict) else {}
+            self._yaw = _finite(odom.get("yaw"))
+            position = odom.get("position")
+            x, y = (_finite(position[0]), _finite(position[1])) if isinstance(position, list) and len(position) >= 2 else (None, None)
+            self._pos = (x, y) if x is not None and y is not None else None
             t_ns = params.get("t_ns")
             self._poses.append((int(t_ns) if isinstance(t_ns, int) else 0, Pose.from_state(params)))
             self._state_at = self.clock()
@@ -130,11 +159,32 @@ class Runner:
             reason = "the robot is limp"
         elif not self._healthy:
             reason = self._health_reason
-        return Inputs(now=now, frame=frame, safe=not reason, safe_reason=reason, yaw=yaw, pose=pose, pos=pos)
+        command = self.commands.pop() if self.commands is not None else None
+        return Inputs(now=now, frame=frame, safe=not reason, safe_reason=reason, yaw=yaw, pose=pose, pos=pos,
+                      command=command)
+
+    def status(self) -> dict:
+        with self._lock:
+            return dict(self._status)
 
     # --- output ----------------------------------------------------------------
     def _send(self, cmd) -> None:
+        if self.observe:
+            return
+        if cmd.head_yaw is not None:
+            # Deltas from the home pose (radians, trunk frame); the walking policy is trained with them.
+            self._notify("robot.head", {"neck_pitch": 0.0, "head_pitch": cmd.head_pitch or 0.0,
+                                        "head_yaw": cmd.head_yaw, "head_roll": 0.0})
         if cmd.kind == "none":
+            return
+        if cmd.kind == "call":
+            try:
+                if not self.link.connected:
+                    self.link.connect()
+                log.warning("recover: %s %s", cmd.method, cmd.params or {})
+                self.link.call(cmd.method, cmd.params or None)
+            except (OSError, RpcError) as e:
+                log.warning("recover: %s failed: %s", cmd.method, e)
             return
         try:
             if not self.link.connected:
@@ -146,13 +196,25 @@ class Runner:
         except (OSError, RpcError) as e:
             log.warning("could not send %s: %s", cmd.kind, e)
 
+    def _notify(self, method: str, params: dict) -> None:
+        try:
+            if not self.link.connected:
+                self.link.connect()
+            self.link.notify(method, params)
+        except (OSError, RpcError) as e:
+            log.warning("could not send %s: %s", method, e)
+
     def send_stop(self) -> None:
         """Safe stop on exit: zero velocity + robot.stop, reconnecting once if needed."""
+        if self.observe:
+            return
         for _ in range(2):
             try:
                 if not self.link.connected:
                     self.link.connect()
                 self.link.notify("robot.move", {"vx": 0.0, "vy": 0.0, "vyaw": 0.0})
+                if self.cfg.head.scan or self.cfg.head.pitch:
+                    self.link.notify("robot.head", {"neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "head_roll": 0.0})
                 self.link.call("robot.stop")
                 return
             except (OSError, RpcError):
@@ -162,6 +224,8 @@ class Runner:
     def run(self) -> None:
         self.tof.start()
         self.state.start()
+        if self.commands is not None:
+            self.commands.start()
         period = 1.0 / self.cfg.loop.rate_hz
         last_log = self.clock()
         last_name = None
@@ -172,6 +236,18 @@ class Runner:
                 cmd = self.brain.tick(inp)
                 self._send(cmd)
                 name = self.brain.state_name
+                if self.commands is not None:
+                    st = self.brain.stats
+                    with self._lock:
+                        self._status = {"state": name, "paused": self.brain.paused, "safe": inp.safe,
+                                        "why": inp.safe_reason, "walked_s": round(st.forward_seconds, 1),
+                                        "commands": st.commands, "gestures": st.gestures,
+                                        "home": self.brain.homing.home is not None,
+                                        "homing": self.brain.homing.active}
+                for _t, ev, angle, why in self.brain.explore_log:
+                    what = ("left" if angle > 0 else "right") if ev == "side" else f"{math.degrees(angle):+.0f}°"
+                    log.info("explore: %s %s%s", ev, what, f" ({why})" if why else "")
+                self.brain.explore_log.clear()
                 if self.recorder is not None:
                     self.recorder.write(inp, cmd, name)
                 if name != last_name:
@@ -188,8 +264,12 @@ class Runner:
                     )
                 self.stop_event.wait(max(0.0, period - (self.clock() - t0)))
         finally:
-            self.send_stop()
-            self.stop_event.set()
-            self.link.close()
-            if self.recorder is not None:
-                self.recorder.close()
+            try:
+                self.send_stop()
+            finally:
+                self.stop_event.set()
+                if self.commands is not None and self.commands.is_alive():
+                    self.commands.join(1.5)      # it removes its socket file on the way out
+                self.link.close()
+                if self.recorder is not None:
+                    self.recorder.close()

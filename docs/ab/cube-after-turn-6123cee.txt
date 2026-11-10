@@ -1,0 +1,11 @@
+off run 1: toy contacts 643, low objects seen 0  (run folder: /root/runs-archive/cube-trials-6123cee/20261104-031255-cube-off)
+off run 2: toy contacts 599, low objects seen 0  (run folder: /root/runs-archive/cube-trials-6123cee/20261104-031402-cube-off)
+off run 3: toy contacts 0, low objects seen 1  (run folder: /root/runs-archive/cube-trials-6123cee/20261104-031507-cube-off)
+off run 4: toy contacts 50, low objects seen 0  (run folder: /root/runs-archive/cube-trials-6123cee/20261104-031613-cube-off)
+off run 5: toy contacts 611, low objects seen 0  (run folder: /root/runs-archive/cube-trials-6123cee/20261104-031719-cube-off)
+on run 1: toy contacts 0, low objects seen 5  (run folder: /root/runs-archive/cube-trials-6123cee/20261104-031825-cube-on)
+on run 2: toy contacts 0, low objects seen 1  (run folder: /root/runs-archive/cube-trials-6123cee/20261104-031931-cube-on)
+on run 3: toy contacts 0, low objects seen 2  (run folder: /root/runs-archive/cube-trials-6123cee/20261104-032037-cube-on)
+on run 4: toy contacts 0, low objects seen 3  (run folder: /root/runs-archive/cube-trials-6123cee/20261104-032142-cube-on)
+on run 5: toy contacts 0, low objects seen 2  (run folder: /root/runs-archive/cube-trials-6123cee/20261104-032248-cube-on)
+configs: both [obstacle] stuck_seconds = 4; on: [head] pitch = true, pitch_while_walking = false (head down while stopping/turning and 1.5 s after). Scene: tools/scenes/cube_after_turn.xml; script: tools/cube_trials.sh; 40 s runs, each from a fresh simulator.

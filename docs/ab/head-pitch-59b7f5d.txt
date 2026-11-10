@@ -1,0 +1,24 @@
+commit 59b7f5d — head.pitch OFF: 3 runs, ON: 3 runs
+
+metric                           OFF mean ± sd [min–max]      ON mean ± sd [min–max]         ON−OFF  signal?
+area_m2                          8.23 ± 0.90 [7.19–8.75]      4.00 ± 1.09 [3.06–5.19]         -4.23  separated
+cells                            131.67 ± 14.43 [115–140]     64.00 ± 17.35 [49–83]          -67.67  separated
+distance_m                       85.53 ± 0.13 [85.44–85.68]   81.93 ± 0.96 [80.85–82.71]      -3.60  separated
+bbox_m2                          27.54 ± 7.91 [20.95–36.32]   8.03 ± 5.54 [4.47–14.41]       -19.51  separated
+avoidances                       412.67 ± 30.66 [384–445]     405.33 ± 23.18 [384–430]        -7.34  noise (ranges overlap)
+avoidances_with_stop             28.67 ± 3.06 [26–32]         108.33 ± 20.79 [93–132]        +79.66  separated
+big_turns                        6.00 ± 1.00 [5–7]            33.00 ± 7.21 [27–41]           +27.00  separated
+turn_s                           19.87 ± 4.74 [14.4–22.7]     59.13 ± 9.61 [49.3–68.5]       +39.26  separated
+falls_or_unhealthy               0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+replay_differing                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+avoids/min after turn in place   28.54 ± 1.33 [27.15–29.8]    37.89 ± 1.98 [35.7–39.54]       +9.35  separated
+avoids/min elsewhere             45.15 ± 3.69 [41.38–48.76]   46.27 ± 4.36 [41.31–49.46]      +1.12  noise (ranges overlap)
+contacts: furniture              1.33 ± 2.31 [0–4]            0.00 ± 0.00 [0–0]               -1.33  noise (ranges overlap)
+contacts: toys                   0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+contacts: stairs                 0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+odometry error, final (m)        0.08 ± 0.05 [0.05–0.14]      0.09 ± 0.02 [0.07–0.1]          +0.01  noise (ranges overlap)
+bends                            0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+bends_refused                    0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+side_choices                     0.00 ± 0.00 [0–0]            0.00 ± 0.00 [0–0]               +0.00  noise (ranges overlap)
+saved: runs/ab-20261103-171125.json
+real-time checks at >= 1.00x: 6

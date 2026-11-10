@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 
-from .depth import BEAMS, DepthFrame, Pose, View, drop_zones, low_obstacles
+from .depth import BEAMS, DepthFrame, Pose, View, drop_zones, geometry, head_yaw, low_obstacles, rotate
 
 LOW = "low"
 DROP = "drop"
@@ -91,10 +91,17 @@ class HazardMap:
     def _detect(self, kind: str, frame: DepthFrame, pose: Pose | None) -> list[tuple[float, float]]:
         """(forward from the sensor, left of the axis) for every zone of this kind in the frame."""
         sl = self.cfg.obstacle.sensor_lateral
+        geom = geometry(pose, self.cfg)                          # the head may pitch: full pose
+        yaw = head_yaw(pose) if self.cfg.head.scan and geom is None else 0.0   # where the head looks
+
+        def trunk(f: float, l: float) -> tuple[float, float]:
+            f, l = rotate(f, l, yaw)
+            return f, l + sl
+
         if kind == LOW:
-            return [(o.forward, o.lateral + sl) for o in low_obstacles(frame, pose, self.cfg)]
+            return [trunk(o.forward, o.lateral) for o in low_obstacles(frame, pose, self.cfg, geom)]
         if kind == DROP:
-            return [(d.forward, d.lateral + sl) for d in drop_zones(frame, pose, self.cfg)]
+            return [trunk(d.forward, d.lateral) for d in drop_zones(frame, pose, self.cfg, geom)]
         o = self.cfg.obstacle
         out = []
         for r in range(o.first_row, o.last_row + 1):
@@ -102,8 +109,14 @@ class HazardMap:
                 d = frame.zone(r, c, math.inf)
                 if d is None or not math.isfinite(d):
                     continue
-                bx, by, _ = BEAMS[r * frame.cols + c]
-                f, lat = d * bx, d * by + sl
+                i = r * frame.cols + c
+                if geom is not None:
+                    if geom.not_an_obstacle(i, d):
+                        continue
+                    bx, by, _ = geom.beams[i]
+                else:
+                    bx, by, _ = BEAMS[i]
+                f, lat = trunk(d * bx, d * by)
                 if f < SIDE_LOOKAHEAD and abs(lat) < SIDE_BAND:
                     out.append((f, lat))
         return out
@@ -118,6 +131,12 @@ class HazardMap:
             k.stored = None
         self._last_frame = None
         self.items = []
+
+    def forget_kind(self, kind: str) -> None:
+        k = self._kinds[kind]
+        k.first, k.found, k.stored = None, [], None
+        k.points.clear()
+        self.items = [h for h in self.items if h.kind != kind]
 
     def remembered(self, kind: str) -> int:
         return len(self._kinds[kind].points)
@@ -140,10 +159,19 @@ class HazardMap:
 
     # --- per tick -----------------------------------------------------------------
     def update(self, frame: DepthFrame | None, pose: Pose | None, pos, yaw: float | None,
-               safe: bool, now: float) -> list[Hazard]:
+               safe: bool, now: float, fell: bool = True) -> list[Hazard]:
+        """``fell``: the reason it is not safe is a fall (or limp). Only then is the memory wiped:
+        after a missed health poll or a late frame the robot hasn't moved, and a hole it stopped
+        for but no longer sees must still be there when it walks again."""
         self.items = []
         if not safe:
-            self.forget()
+            if fell:
+                self.forget()
+            else:
+                for k in self._kinds.values():
+                    k.first = None
+                    k.found = []
+                self._last_frame = None     # look at the current frame afresh once it is safe again
             return self.items
         sx = pose.sensor_pos[0] if pose else self.cfg.low.nominal_sensor_forward
         can_remember = pos is not None and yaw is not None
@@ -186,6 +214,8 @@ class HazardMap:
                     self.stats.drops_seen += new
 
             if memory <= 0:
+                if not can_remember and self._memory_seconds(kind) > 0:
+                    continue        # no pose this tick: keep the points (they still age), use none
                 k.points.clear()
                 continue
             c, s = math.cos(yaw), math.sin(yaw)

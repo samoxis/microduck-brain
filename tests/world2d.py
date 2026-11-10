@@ -1,0 +1,243 @@
+"""A flat 2-D world for closed-loop runs without the simulator: walls as segments, an ideal floor,
+the real 8x8 beam geometry and a plant with the measured real/commanded ratios.
+
+It is deliberately simple (no balance, no slip, walls infinitely tall, the sensor level at its
+nominal height), so it answers questions about *decisions* — where the brain goes, how much of a
+room it covers — not about perception. Coverage uses the same metric as ``record.metrics``.
+
+Benchmark (baseline vs. exploration)::
+
+    uv run python -m tests.world2d --seconds 300
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import random
+from dataclasses import dataclass, field
+
+from microduck_brain.brain import Brain, Inputs
+from microduck_brain.config import Config, from_dict
+from microduck_brain.depth import BEAMS, DepthFrame
+
+SENSOR_HEIGHT = 0.246
+SENSOR_FORWARD = 0.064
+SENSOR_LEFT = 0.0224
+BODY_RADIUS = 0.09        # trunk-centre clearance to a wall: closer = contact, the move is refused
+FORWARD_RATIO = 0.42      # real / commanded forward speed (0.24 commanded ≈ 0.10 m/s, measured)
+TURN_RATIO = 0.55         # real / commanded turn rate (46–69% measured)
+MAX_RANGE_MM = 4000
+
+Seg = tuple[float, float, float, float]
+
+
+def box(x0: float, y0: float, x1: float, y1: float) -> list[Seg]:
+    return [(x0, y0, x1, y0), (x1, y0, x1, y1), (x1, y1, x0, y1), (x0, y1, x0, y0)]
+
+
+def _ray_seg(px, py, dx, dy, s: Seg) -> float:
+    """Ray parameter t (point = p + t·d) where it meets the segment, inf if it doesn't."""
+    x0, y0, x1, y1 = s
+    ex, ey = x1 - x0, y1 - y0
+    den = dx * ey - dy * ex
+    if abs(den) < 1e-12:
+        return math.inf
+    qx, qy = x0 - px, y0 - py
+    t = (qx * ey - qy * ex) / den
+    u = (qx * dy - qy * dx) / den
+    return t if t > 1e-6 and 0.0 <= u <= 1.0 else math.inf
+
+
+def _dist_seg(px, py, s: Seg) -> float:
+    x0, y0, x1, y1 = s
+    ex, ey = x1 - x0, y1 - y0
+    L = ex * ex + ey * ey
+    u = 0.0 if L == 0 else max(0.0, min(1.0, ((px - x0) * ex + (py - y0) * ey) / L))
+    return math.hypot(px - (x0 + u * ex), py - (y0 + u * ey))
+
+
+@dataclass
+class World:
+    name: str
+    walls: list[Seg]
+    start: tuple[float, float, float]           # x, y, yaw
+
+    def render(self, x: float, y: float, yaw: float, head: float = 0.0, pitch: float = 0.0) -> DepthFrame:
+        """``head`` = head yaw relative to the trunk (rad, + = left), ``pitch`` = head pitch (rad, + =
+        down; the sensor drops 6.3 cm per rad, as measured in MuJoCo). The neck offset is ignored."""
+        c, s = math.cos(yaw), math.sin(yaw)
+        sx = x + c * SENSOR_FORWARD - s * SENSOR_LEFT
+        sy = y + s * SENSOR_FORWARD + c * SENSOR_LEFT
+        ch, sh = math.cos(yaw + head), math.sin(yaw + head)
+        dist, status = [], []
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        height = SENSOR_HEIGHT - 0.063 * pitch
+        for bx, by, bz in BEAMS:
+            bx, bz = bx * cp + bz * sp, bz * cp - bx * sp
+            dx, dy = ch * bx - sh * by, sh * bx + ch * by
+            t = height / -bz if bz < -1e-9 else math.inf
+            for w in self.walls:
+                t = min(t, _ray_seg(sx, sy, dx, dy, w))
+            mm = int(round(t * 1000)) if math.isfinite(t) else MAX_RANGE_MM + 1
+            if mm > MAX_RANGE_MM:
+                dist.append(0)
+                status.append(255)
+            else:
+                dist.append(mm)
+                status.append(5)
+        return DepthFrame(8, 8, tuple(dist), tuple(status))
+
+    def clearance(self, x: float, y: float) -> float:
+        return min(_dist_seg(x, y, w) for w in self.walls)
+
+
+def worlds() -> list[World]:
+    """Small apartment-like layouts, a few metres across, like the simulator's rooms."""
+    out = [World("room 4x3", box(0, 0, 4, 3), (1.0, 1.0, 0.3))]
+    # Two rooms joined by a 0.6 m door.
+    w = box(0, 0, 6, 3) + [(3, 0, 3, 1.2), (3, 1.8, 3, 3)]
+    out.append(World("two rooms + door", w, (1.0, 1.5, 0.0)))
+    # L-shaped room.
+    out.append(World("L-shaped", [(0, 0, 5, 0), (5, 0, 5, 2), (5, 2, 2, 2), (2, 2, 2, 4), (2, 4, 0, 4), (0, 4, 0, 0)],
+                     (0.6, 0.6, 0.8)))
+    # A living room with furniture (a sofa, a table, two stools).
+    w = box(0, 0, 5, 4) + box(0.0, 3.2, 2.0, 4.0) + box(2.6, 1.4, 3.4, 2.2)
+    w += box(1.2, 1.0, 1.45, 1.25) + box(4.0, 3.0, 4.25, 3.25)
+    out.append(World("living room", w, (0.5, 0.5, 0.5)))
+    return out
+
+
+def chair_legs() -> World:
+    """A dining room: a table and six chairs, i.e. 28 legs of 3 cm, the thing a 45° view loses
+    beside the body (finding 6)."""
+    w = box(0, 0, 5, 4)
+    legs = []
+    for tx, ty in ((1.6, 1.4), (1.6, 2.6), (3.4, 1.4), (3.4, 2.6)):            # table, 1.8 x 1.2 m
+        legs.append((tx, ty))
+    for cx, cy in ((2.0, 0.9), (3.0, 0.9), (2.0, 3.1), (3.0, 3.1), (1.1, 2.0), (3.9, 2.0)):   # chairs, 0.4 m
+        legs += [(cx - 0.2, cy - 0.2), (cx + 0.2, cy - 0.2), (cx - 0.2, cy + 0.2), (cx + 0.2, cy + 0.2)]
+    for lx, ly in legs:
+        w += box(lx - 0.015, ly - 0.015, lx + 0.015, ly + 0.015)
+    return World("dining room (legs)", w, (0.5, 0.5, 0.6))
+
+
+@dataclass
+class Result:
+    world: str
+    distance: float = 0.0
+    cells: set = field(default_factory=set)
+    contacts: int = 0
+    contact_times: list = field(default_factory=list)
+    stats: object = None
+    bend_open: bool = False
+    odom_error: float = 0.0          # final distance between the odometry and the truth (m)
+    corrected_error: float = 0.0     # ... and between the corrected odometry and the truth
+
+    @property
+    def area(self) -> float:
+        return len(self.cells) * 0.0625
+
+
+HEAD_TAU = 0.12          # the head follows its command with this time constant (s; robotd low-passes it)
+HEAD_RATE = 4.0          # ... and at most this fast (rad/s)
+
+
+def _pose(head: float, pitch: float = 0.0):
+    from microduck_brain.depth import Pose
+
+    cy, sy, cp, sp = math.cos(head / 2), math.sin(head / 2), math.cos(pitch / 2), math.sin(pitch / 2)
+    quat = (cy * cp, -sy * sp, cy * sp, sy * cp)           # yaw about z, then pitch about y
+    return Pose((SENSOR_FORWARD, SENSOR_LEFT, SENSOR_HEIGHT - 0.12 - 0.063 * pitch), quat, (0.0, 0.0, -1.0), 0.12)
+
+
+def run(world: World, cfg: Config, seconds: float = 300.0, seed: int = 0, drift: float = 0.04,
+        dt: float = 0.05, frame_every: int = 1, recorder=None, with_pose: bool = False,
+        body_radius: float = BODY_RADIUS, odom_yaw_drift: float = 0.0, odom_scale: float = 1.0) -> Result:
+    """Closed loop: frame -> brain -> plant. ``drift`` = the gait's yaw drift while walking (rad/s),
+    randomised in sign and size per seed, like the real policy's. ``with_pose`` sends a sensor pose
+    (frames.tof) like the real robot does, including where the head looks; head scanning needs it.
+    ``odom_yaw_drift`` (rad/s, sign random per seed) and ``odom_scale`` make the reported odometry
+    drift from the truth: its yaw gains that rate, its distances are scaled (default: perfect)."""
+    rng = random.Random(seed)
+    x, y, yaw = world.start
+    yaw += rng.uniform(-0.5, 0.5)
+    bias = drift * rng.uniform(0.5, 1.5) * rng.choice((-1, 1))
+    yaw_drift = odom_yaw_drift * rng.choice((-1, 1))
+    ox, oy, oyaw = x, y, yaw          # the odometry's belief
+    brain = Brain(cfg)
+    res = Result(world.name)
+    t, n, frame = 0.0, 0, None
+    touching = False
+    head, head_cmd, pitch, pitch_cmd = 0.0, 0.0, 0.0, 0.0
+    pose = _pose(0.0) if with_pose else None
+    while t < seconds:
+        if n % frame_every == 0:
+            frame = world.render(x, y, yaw, head, pitch)
+            pose = _pose(head, pitch) if with_pose else None
+        n += 1
+        wyaw = (oyaw + math.pi) % (2 * math.pi) - math.pi
+        inp = Inputs(t, frame, True, "", wyaw, pose, (ox, oy))
+        cmd = brain.tick(inp)
+        if cmd.head_yaw is not None:
+            head_cmd = cmd.head_yaw
+        if cmd.head_pitch is not None:
+            pitch_cmd = cmd.head_pitch
+        step = (head_cmd - head) * min(1.0, dt / HEAD_TAU)
+        head += max(-HEAD_RATE * dt, min(HEAD_RATE * dt, step))
+        step = (pitch_cmd - pitch) * min(1.0, dt / HEAD_TAU)
+        pitch += max(-HEAD_RATE * dt, min(HEAD_RATE * dt, step))
+        if recorder is not None:
+            recorder.write(inp, cmd, brain.state_name)
+        if cmd.kind == "move":
+            v = FORWARD_RATIO * cmd.vx
+            yaw += (TURN_RATIO * cmd.vyaw + (bias if cmd.vx > 0 else 0.0)) * dt
+            dyaw = (TURN_RATIO * cmd.vyaw + (bias if cmd.vx > 0 else 0.0)) * dt
+            oyaw += dyaw + yaw_drift * dt
+            nx, ny = x + v * math.cos(yaw) * dt, y + v * math.sin(yaw) * dt
+            if world.clearance(nx, ny) >= body_radius:
+                res.distance += math.hypot(nx - x, ny - y)
+                step = math.hypot(nx - x, ny - y) * odom_scale
+                ox, oy = ox + step * math.cos(oyaw), oy + step * math.sin(oyaw)
+                x, y = nx, ny
+                touching = False
+            elif not touching:
+                res.contacts += 1
+                res.contact_times.append(t)
+                touching = True
+        res.cells.add((math.floor(x / 0.25), math.floor(y / 0.25)))
+        t += dt
+    res.stats = brain.stats
+    res.bend_open = brain.bend is not None
+    res.odom_error = math.hypot(ox - x, oy - y)
+    (cx, cy), _ = brain.localizer.correct((ox, oy), oyaw)
+    res.corrected_error = math.hypot(cx - x, cy - y)
+    return res
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Coverage benchmark in flat 2-D worlds")
+    ap.add_argument("--seconds", type=float, default=300.0)
+    ap.add_argument("--seeds", type=int, default=4)
+    args = ap.parse_args()
+    configs = {"baseline": Config(), "explore": from_dict({"explore": {"enabled": True}})}
+    total = {k: [0.0, 0.0, 0] for k in configs}
+    for w in worlds():
+        for name, cfg in configs.items():
+            areas, dists, contacts = [], [], 0
+            for seed in range(args.seeds):
+                r = run(w, cfg, args.seconds, seed)
+                areas.append(r.area)
+                dists.append(r.distance)
+                contacts += r.contacts
+            a, d = sum(areas) / len(areas), sum(dists) / len(dists)
+            total[name][0] += a
+            total[name][1] += d
+            total[name][2] += contacts
+            print(f"{w.name:18s} {name:9s} area {a:5.2f} m²  (min {min(areas):5.2f})  walked {d:5.1f} m  contacts {contacts}")
+    for name, (a, d, c) in total.items():
+        print(f"{'TOTAL':18s} {name:9s} area {a:5.2f} m²  walked {d:5.1f} m  contacts {c}")
+
+
+if __name__ == "__main__":
+    main()

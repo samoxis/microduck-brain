@@ -47,6 +47,9 @@ class Recorder:
         self._last_frame: object = None
         self._last_pose: object = None
         self._first = True
+        self._flushed_at: float | None = None
+
+    FLUSH_EVERY = 1.0   # s: at most this much is lost at a power cut, and the file stays readable
 
     def write(self, inp: Inputs, cmd: Command, state: str) -> None:
         rec: dict = {
@@ -54,11 +57,17 @@ class Recorder:
             "safe": inp.safe,
             "yaw": inp.yaw,
             "pos": list(inp.pos) if inp.pos is not None else None,
-            "cmd": [cmd.kind, round(cmd.vx, 5), round(cmd.vyaw, 5)],
+            "cmd": [cmd.kind, round(cmd.vx, 5), round(cmd.vyaw, 5)]
+                   + ([round(cmd.head_yaw, 5)] if cmd.head_yaw is not None else [])
+                   + ([round(cmd.head_pitch, 5)] if cmd.head_pitch is not None else []),
             "state": state,
         }
         if inp.safe_reason:
             rec["why"] = inp.safe_reason
+        if inp.command:
+            rec["c"] = inp.command
+        if cmd.kind == "call":
+            rec["call"] = [cmd.method, cmd.params or {}]
         if self._first or inp.frame is not self._last_frame:
             rec["f"] = None if inp.frame is None else {"d": list(inp.frame.distance_mm), "s": list(inp.frame.status)}
             self._last_frame = inp.frame
@@ -67,6 +76,9 @@ class Recorder:
             self._last_pose = inp.pose
         self._first = False
         self._fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+        if self._flushed_at is None or inp.now - self._flushed_at >= self.FLUSH_EVERY:
+            self._flushed_at = inp.now
+            self._fh.flush()       # gzip: a sync flush, so everything up to here decompresses
 
     def close(self) -> None:
         if not self._fh.closed:
@@ -80,6 +92,17 @@ class Tick:
     state: str
 
 
+def _next_line(lines) -> str | None:
+    """The next line, or None at the end -- also the end of a gzip stream that was cut off (a run
+    stopped by a power cut: everything up to the last flush is still there)."""
+    try:
+        return next(lines)
+    except StopIteration:
+        return None
+    except (EOFError, gzip.BadGzipFile):
+        return None
+
+
 def read(path: str | Path) -> Iterator[Tick]:
     """The recorded ticks, with frames and poses restored."""
     frame: DepthFrame | None = None
@@ -88,10 +111,20 @@ def read(path: str | Path) -> Iterator[Tick]:
         header = json.loads(fh.readline())
         if header.get("kind") != HEADER["kind"] or header.get("format") != FORMAT:
             raise ValueError(f"{path}: not a microduck-brain recording (format {FORMAT})")
-        for line in fh:
+        lines = iter(fh)
+        line = _next_line(lines)
+        while line is not None:
+            nxt = _next_line(lines)
             if not line.strip():
+                line = nxt
                 continue
-            r = json.loads(line)
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                if nxt is None:
+                    return            # the half-written last line of a run that was cut off
+                raise
+            line = nxt
             if "f" in r:
                 f = r["f"]
                 frame = None if f is None else DepthFrame(8, 8, tuple(f["d"]), tuple(f["s"]))
@@ -101,9 +134,12 @@ def read(path: str | Path) -> Iterator[Tick]:
             inp = Inputs(
                 now=r["t"], frame=frame, safe=r["safe"], safe_reason=r.get("why", ""),
                 yaw=r["yaw"], pose=pose, pos=tuple(r["pos"]) if r["pos"] is not None else None,
+                command=r.get("c"),
             )
-            kind, vx, vyaw = r["cmd"]
-            yield Tick(inp, Command(kind, vx, vyaw), r["state"])
+            kind, vx, vyaw, *head = r["cmd"]
+            method, params = r.get("call", ["", None])
+            yield Tick(inp, Command(kind, vx, vyaw, head[0] if head else None,
+                                    head[1] if len(head) > 1 else None, method, params), r["state"])
 
 
 @dataclass
@@ -122,6 +158,14 @@ def replay(path: str | Path, cfg: Config) -> Replay:
         cmd = out.brain.tick(tick.inputs)
         out.ticks += 1
         same = cmd.kind == tick.cmd.kind and abs(cmd.vx - tick.cmd.vx) < 1e-4 and abs(cmd.vyaw - tick.cmd.vyaw) < 1e-4
+        if (cmd.head_pitch is None) != (tick.cmd.head_pitch is None) or (
+                cmd.head_pitch is not None and abs(cmd.head_pitch - tick.cmd.head_pitch) > 1e-4):
+            same = False
+        if cmd.kind == "call" and (cmd.method, cmd.params or {}) != (tick.cmd.method, tick.cmd.params or {}):
+            same = False
+        if (cmd.head_yaw is None) != (tick.cmd.head_yaw is None) or (
+                cmd.head_yaw is not None and abs(cmd.head_yaw - tick.cmd.head_yaw) > 1e-4):
+            same = False
         if not same:
             out.differing += 1
             if out.first_difference is None:
